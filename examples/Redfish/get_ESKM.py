@@ -48,6 +48,12 @@ def get_ESKM(_redfishobj):
                 break
 
     if security_service_eskm_uri:
+        managers_uri = _redfishobj.root.obj['Managers']['@odata.id']
+        managers_response = _redfishobj.get(managers_uri)
+        managers_members_uri = next(iter(managers_response.obj['Members']))['@odata.id']
+        managers_members_response = _redfishobj.get(managers_members_uri)
+        security_service_uri = managers_members_response.obj.Oem.Hpe.Links\
+                                                                ['SecurityService']['@odata.id']U
         security_service_eskm_uri = _redfishobj.get(security_service_uri).obj.Links\
                                                                             ['ESKM']['@odata.id']
         security_service_eskm_resp = _redfishobj.get(security_service_eskm_uri)
