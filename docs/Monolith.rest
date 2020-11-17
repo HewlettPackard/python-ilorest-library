@@ -21,7 +21,7 @@ Direct Monolith Usage
 
 Direct usage of the monolith can be useful for crawling an entire tree or creating your own app
 implementation. The first thing we need to do is create a client and login.
-If you are unfamiliar with clients, please see the `Quickstart section <Quick-Start.html>`_.
+If you are unfamiliar with clients, please see the `Quickstart section <Quick-Start.html>`__.
 
 Creating a monolith
 -------------------
@@ -31,7 +31,7 @@ Creating a monolith
 >>> REST_OBJ.login()
 
 Then, we need to create a compatibility instance that goes along with this client. For more information
-on this compatibility class, see `System Compatibility <System-Compatibility.html>`_.
+on this compatibility class, see `System Compatibility <System-Compatibility.html>`__.
 
 >>> from redfish.ris.gen_compat import Typesandpathdefines
 >>> COMPAT_OBJ = Typesandpathdefines()
@@ -125,7 +125,7 @@ AttributeError: 'NoneType' object has no attribute 'dict'
 
 .. note:: Any response without a json response will return an **AttributeError**
 
-For a full list of options in **load**, see the resource documentation `here <Reference.html#redfish.ris.ris.RisMonolith.load>`_.
+For a full list of options in **load**, see the resource documentation `here <Reference.html#redfish.ris.ris.RisMonolith.load>`__.
 
 RmcApp Usage
 =====================
@@ -133,7 +133,7 @@ RmcApp Usage
 The RmcApp class is a convenience class that combines the client, compatibility, validation, caching, and monolith into one class.
 RmcApp supplies functions for easily interacting with a server and monolith.
 
-For full functionality see the reference on RmcApp `here <Reference.html#module-redfish.ris.rmc>`_.
+For full functionality see the reference on RmcApp `here <Reference.html#module-redfish.ris.rmc>`__.
 
 Creating the RmcApp class
 -------------------------
@@ -252,7 +252,7 @@ We can double check our setting applied with another getprops call.
 Performing Actions
 ******************
 
-Actions are just **POST** operations. They can be performed with the RmcApp handlers for raw HTTP commands. See the `post_handler <Monolith.html#id2>`_.
+Actions are just **POST** operations. They can be performed with the RmcApp handlers for raw HTTP commands. See the `post_handler <Monolith.html#id2>`__.
 
 HTTP handlers
 *************

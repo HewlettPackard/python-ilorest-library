@@ -11,14 +11,14 @@
 Client Quick Start
 ==================
 
-This section describes the basic functionality of the library for users, who only need a basic client configured for a LegacyRest or Redfish host. For a convenient class for performing higher level functionality or for users unfamiliar with Redfish implementations, see `RmcApp Usage <Monolith.html#rmcapp-usage>`_.
+This section describes the basic functionality of the library for users, who only need a basic client configured for a LegacyRest or Redfish host. For a convenient class for performing higher level functionality or for users unfamiliar with Redfish implementations, see `RmcApp Usage <Monolith.html#rmcapp-usage>`__.
 
 This Quick Start covers client object creation, a simple call to the API, and a response object.
 
-Scripts of the information provided below are available at: `quickstart_redfish.py <https://github.com/HewlettPackard/python-ilorest-library/blob/master/examples/quickstart_redfish.py>`_
-and `quickstart_legacy_rest.py <https://github.com/HewlettPackard/python-ilorest-library/blob/master/examples/quickstart_legacy_rest.py>`_.
+Scripts of the information provided below are available at: `quickstart_redfish.py <https://github.com/HewlettPackard/python-ilorest-library/blob/master/examples/quickstart_redfish.py>`__
+and `quickstart_legacy_rest.py <https://github.com/HewlettPackard/python-ilorest-library/blob/master/examples/quickstart_legacy_rest.py>`__.
 
-For more elaborate examples that use the Redfish API and the python-ilorest-library, see the `Examples <Examples.html>`_ section.
+For more elaborate examples that use the Redfish API and the python-ilorest-library, see the `Examples <Examples.html>`__ section.
 
 The python-ilorest-library provides support for communication using both remote using HTTPS and local in-band using CHIF.
 
@@ -51,7 +51,7 @@ Create a Redfish Object
  Creation of a Redfish object instance is done using the **RedfishClient** class instead of the **redfish_client** function.
 
 **RedfishClient** takes as parameters iLO hostname/IP address, username, password, and other optional arguments.
-For a full list of optional arguments see `here <Reference.html#redfish.rest.v1.RedfishClient>`_.
+For a full list of optional arguments see `here <Reference.html#redfish.rest.v1.RedfishClient>`__.
 
 .. code-block:: python
 
@@ -64,7 +64,7 @@ Create a LegacyRest Object
  Creation of a Legacy Rest object instance is done using the **LegacyRestClient** class instead of the **rest_client** function.
 
 **LegacyRestClient** takes as parameters iLO hostname/IP address, username, password, and other optional arguments.
-For a full list of optional arguments see `here <Reference.html#redfish.rest.v1.LegacyRestClient>`_.
+For a full list of optional arguments see `here <Reference.html#redfish.rest.v1.LegacyRestClient>`__.
 
 .. code-block:: python
 
@@ -181,7 +181,7 @@ The formated Response body (Truncated for size):
 .. literalinclude:: redfish_quick.json
   :language: JSON
 
-A full description of the Response Object is available in the reference `here <Reference.html#redfish.rest.containers.RestResponse>`_.
+A full description of the Response Object is available in the reference `here <Reference.html#redfish.rest.containers.RestResponse>`__.
 
 Other HTTP Requests
 ===================
@@ -206,4 +206,4 @@ Continued Reading
 =================
 
 That's it! You're ready to perform some Redfish requests! If you are looking for more advanced topics like
-*setting timeouts*, more detail on the *response* object, or configuration of the *Redfish* or *LegacyRest* objects check out the `Advanced Usage <Advanced-Usage.html>`_ section.
+*setting timeouts*, more detail on the *response* object, or configuration of the *Redfish* or *LegacyRest* objects check out the `Advanced Usage <Advanced-Usage.html>`__ section.
