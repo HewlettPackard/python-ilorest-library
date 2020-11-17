@@ -71,10 +71,10 @@ For a full list of optional arguments see `here <Reference.html#redfish.rest.v1.
    REST_OBJ = redfish.LegacyRestClient(base_url=iLO_host, username=login_account, password=login_password)
 
 Creating a Local Object
-===========================
+=======================
 
 Requirements
------------------------
+------------
 * You must be running on a server with iLO and the latest iLO drivers from the SPP.
 * You will need to download the iLOrest Chif DLL/SO for your corresponding operating system and place it in your working environment path.
 
