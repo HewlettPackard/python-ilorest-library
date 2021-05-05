@@ -70,13 +70,20 @@ class RisObject(dict):
     :param d: dictionary to be converted
     :type d: dict
     """
-    __getattr__ = dict.__getitem__
-
     def __init__(self, d):
         """Initialize RisObject
         """
         super(RisObject, self).__init__()
         self.update(**dict((k, self.parse(value)) for k, value in list(d.items())))
+
+    def __getattr__(self, k):
+        try:
+            return self[k]
+        except KeyError:
+            raise AttributeError(
+                "type object '%s' has no attribute '%s'" %
+                (self.__class__.__name__, k)
+            )
 
     @classmethod
     def parse(cls, value):
