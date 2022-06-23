@@ -307,7 +307,21 @@ class RestClient(RestClientBase):
     @session_location.setter
     def session_location(self, ses_loc):
         """Set the session URI"""
-        self._session_location = ses_loc
+        from urllib.parse import urlparse
+        login_url_p = urlparse(self.base_url)
+        new_port = login_url_p.port
+        # The session_url returned by iLO does not include the port information
+        # If we're using a non-standard port to connect to iLO we have to
+        # manually insert it, based on the base_url.
+        if new_port and ses_loc:
+            print(ses_loc)
+            session_location_p = urlparse(ses_loc)
+            session_location_p = session_location_p._replace(netloc=f"{session_location_p.hostname}:{new_port}")
+            print(session_location_p)
+            print(session_location_p.geturl())
+            self._session_location = session_location_p.geturl()
+        else:
+            self._session_location = ses_loc
 
     @property
     def username(self):
