@@ -946,6 +946,9 @@ class RmcApp(object):
 
         if results and getattr(results, "status", None) and results.status == 404:
             return results
+        
+        if results and results.status == 200 and sessionid:
+            return results
 
         if not uncache and results.status == 200 and not sessionid:
             if self.monolith:

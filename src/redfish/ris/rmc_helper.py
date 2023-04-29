@@ -263,9 +263,11 @@ class RmcFileCacheManager(RmcCacheManager):
                                         )[-1]
                                         sesurl = None
                                     else:
-                                        loc = data["login"]["session_location"].split(
-                                            data["login"]["url"]
-                                        )[-1]
+                                        loc = None
+                                        if data["login"]["session_location"] is not None:
+                                            loc = data["login"]["session_location"].split(
+                                                data["login"]["url"]
+                                            )[-1]
                                         sesurl = data["login"]["url"]
                                     sessionlocs.append(
                                         (

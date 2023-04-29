@@ -112,13 +112,16 @@ class HpIlo(object):
         fhandle = c_void_p()
         self.dll = dll
         if LOGGER.isEnabledFor(logging.DEBUG):
+            LOGGER.info("Enabling DEBUG from libhpsrv")
             self.dll.enabledebugoutput()
+        LOGGER.info("Calling ChifInitialize from libhpsrv")
         self.dll.ChifInitialize(None)
 
         self.dll.ChifCreate.argtypes = [c_void_p]
         self.dll.ChifCreate.restype = c_uint32
 
         try:
+            LOGGER.info("Calling ChifCreate from libhpsrv - handle = %s", fhandle)
             status = self.dll.ChifCreate(byref(fhandle))
             if status != BlobReturnCodes.SUCCESS:
                 raise HpIloInitialError(
@@ -128,6 +131,7 @@ class HpIlo(object):
             self.fhandle = fhandle
 
             if not "skip_ping" in os.environ:
+                LOGGER.info("Calling ChifPing from libhpsrv - handle = %s", self.fhandle)
                 status = self.dll.ChifPing(self.fhandle)
                 if status != BlobReturnCodes.SUCCESS:
                     errmsg = (
@@ -139,7 +143,7 @@ class HpIlo(object):
                     elif status == BlobReturnCodes.CHIFERR_AccessDenied:
                         errmsg = "You must be root/Administrator to use this program."
                     raise HpIloInitialError(errmsg)
-
+                LOGGER.info("Calling ChifSetRecvTimeout from libhpsrv - handle = %s", self.fhandle)
                 self.dll.ChifSetRecvTimeout(self.fhandle, 60000)
         except:
             raise
@@ -155,7 +159,7 @@ class HpIlo(object):
         buff = create_string_buffer(bytes(data))
 
         recbuff = create_string_buffer(datarecv)
-
+        LOGGER.info("Calling ChifPacketExchange from libhpsrv - handle = %s", self.fhandle)
         error = self.dll.ChifPacketExchange(
             self.fhandle, byref(buff), byref(recbuff), datarecv
         )
@@ -213,6 +217,7 @@ class HpIlo(object):
         """Chif close function"""
         try:
             if self.fhandle is not None:
+                LOGGER.info("Calling ChifClose from libhpsrv - handle = %s", self.fhandle)
                 self.dll.ChifClose(self.fhandle)
                 self.fhandle = None
         except Exception:

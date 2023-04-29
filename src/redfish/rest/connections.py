@@ -16,6 +16,7 @@
 
 # -*- coding: utf-8 -*-
 """All Connections for interacting with REST."""
+import os
 import time
 import gzip
 import json
@@ -106,7 +107,7 @@ class HttpConnection(object):
         self._connection_properties = client_kwargs
         if cert_data:
             if ("cert_file" in cert_data and cert_data["cert_file"]) or (
-                "ca_certs" in cert_data and cert_data["ca_certs"]
+                    "ca_certs" in cert_data and cert_data["ca_certs"]
             ):
                 self._connection_properties.update({"ca_cert_data": cert_data})
         self._proxy = self._connection_properties.pop("proxy", None)
@@ -133,13 +134,17 @@ class HttpConnection(object):
                 self._connection_properties.pop("ca_cert_data")
             )
 
+        timeout = urllib3.util.Timeout(connect=4800, read=4800)
+        retries = urllib3.util.Retry(connect=50, read=50, redirect=50)
         if self.proxy:
             if self.proxy.startswith("socks"):
                 LOGGER.info("Initializing a SOCKS proxy.")
                 http = SOCKSProxyManager(
                     self.proxy,
                     cert_reqs=cert_reqs,
-                    maxsize=6,
+                    maxsize=50,
+                    timeout=timeout,
+                    retries=retries,
                     **self._connection_properties
                 )
             else:
@@ -147,7 +152,9 @@ class HttpConnection(object):
                 http = ProxyManager(
                     self.proxy,
                     cert_reqs=cert_reqs,
-                    maxsize=6,
+                    maxsize=50,
+                    timeout=timeout,
+                    retries=retries,
                     **self._connection_properties
                 )
         else:
@@ -156,20 +163,17 @@ class HttpConnection(object):
                 self._connection_properties.pop("ca_cert_data")
             except KeyError:
                 pass
-            timeout = urllib3.Timeout(connect=40.0, read=40.0)
+
             if "timeout" not in self._connection_properties:
-                http = PoolManager(
-                    cert_reqs=cert_reqs,
-                    maxsize=6,
-                    timeout=timeout,
-                    retries=urllib3.Retry(connect=10, read=10, redirect=2),
-                    **self._connection_properties
-                )
+                http = PoolManager(maxsize=50,
+                                   cert_reqs=cert_reqs,
+                                   timeout=timeout,
+                                   retries=retries,
+                                   **self._connection_properties
+                                   )
             else:
-                http = PoolManager(
-                    cert_reqs=cert_reqs, maxsize=6, **self._connection_properties,
-                    retries=urllib3.Retry(connect=10, read=10, redirect=2)
-                )
+                http = PoolManager(cert_reqs=cert_reqs, maxsize=50, retries=retries, **self._connection_properties)
+
 
         self._conn = http.request
 
