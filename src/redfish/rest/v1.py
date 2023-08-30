@@ -23,6 +23,8 @@ import json
 import base64
 import hashlib
 import logging
+import netrc
+import os
 import sys
 from urllib.parse import urlparse
 
@@ -256,6 +258,7 @@ class RestClient(RestClientBase):
         base_url=None,
         auth=None,
         ca_cert_data=None,
+        use_netrc=False,
         **client_kwargs
     ):
         """Create a Rest Client object"""
@@ -266,6 +269,15 @@ class RestClient(RestClientBase):
             auth, ca_cert_data=ca_cert_data, **client_kwargs
         )
         self._auth_key = None
+
+        # If .netrc should be considered, use it to preload username and/or password
+        if use_netrc and not (username and password):
+            netrc_user, netrc_pass = self._get_netrc_auth(base_url)
+            if username is None and netrc_user:
+                username = netrc_user
+            if password is None and netrc_pass:
+                password = netrc_pass
+
         self._user_pass = (username, password)
         self._session_location = None
         self._cert_data = ca_cert_data
@@ -285,6 +297,49 @@ class RestClient(RestClientBase):
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Close the connection"""
         self.logout()
+
+    def _get_netrc_auth(self, url):
+        """Get username and password from a .netrc if available"""
+
+        # inspired by request's get_netrc_auth
+
+        hostname = urlparse(url).netloc.split(":")[0]  # ignore port if present
+
+        path = None
+
+        try:
+            path = os.environ["NETRC"]
+        except KeyError:
+            for name in (".netrc", "_netrc"):
+                try:
+                    path = os.path.expanduser(f"~/{name}")
+                except KeyError:
+                    break
+
+                if os.path.exists(path):
+                    break
+
+        if not path:
+            LOGGER.error("Requested use of .netrc, but no .netrc found")
+
+        try:
+            login, account, pwd = netrc.netrc(path).authenticators(hostname)
+        except FileNotFoundError as exc:
+            LOGGER.error(
+                f"Requested use of .netrc, but file inaccessible at '{path}'", exc)
+            return (None, None)
+        except netrc.NetrcParseError as exc:
+            LOGGER.error(
+                f"Requested use of .netrc, but parsing failed for '{path}'", exc)
+            return (None, None)
+        except ValueError:
+            LOGGER.info(f"No matching entry found in '{path}' for: {hostname}")
+            return (None, None)
+
+        if login:
+            return (login, pwd)
+
+        return (account, pwd)
 
     def _get_auth_type(self, auth_param, ca_cert_data=None, **client_kwargs):
         """Get the auth type based on key args or positional argument.
