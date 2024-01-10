@@ -128,7 +128,12 @@ class HttpConnection(object):
     def __init__(self, base_url, cert_data, **client_kwargs):
         self._conn = None
         self.base_url = base_url
-        self._connection_properties = client_kwargs
+        # Default values for connection properties
+        self._connection_properties = {
+            'timeout': urllib3.util.Timeout(connect=4800, read=4800),
+            'retries': urllib3.util.Retry(connect=50, read=50, redirect=50),
+        }
+        self._connection_properties.update(client_kwargs)
         if cert_data:
             if ("cert_file" in cert_data and cert_data["cert_file"]) or (
                 "ca_certs" in cert_data and cert_data["ca_certs"]
@@ -157,8 +162,6 @@ class HttpConnection(object):
             cert_reqs = "CERT_NONE"
             self._connection_properties.update(self._connection_properties.pop("ca_cert_data"))
 
-        timeout = urllib3.util.Timeout(connect=4800, read=4800)
-        retries = urllib3.util.Retry(connect=50, read=50, redirect=50)
         if self.proxy:
             if self.proxy.startswith("socks"):
                 LOGGER.info("Initializing a SOCKS proxy.")
@@ -166,8 +169,6 @@ class HttpConnection(object):
                     self.proxy,
                     cert_reqs=cert_reqs,
                     maxsize=50,
-                    timeout=timeout,
-                    retries=retries,
                     **self._connection_properties
                 )
             else:
@@ -176,8 +177,6 @@ class HttpConnection(object):
                     self.proxy,
                     cert_reqs=cert_reqs,
                     maxsize=50,
-                    timeout=timeout,
-                    retries=retries,
                     **self._connection_properties
                 )
         else:
@@ -187,12 +186,11 @@ class HttpConnection(object):
             except KeyError:
                 pass
 
-            if "timeout" not in self._connection_properties:
-                http = PoolManager(
-                    maxsize=50, cert_reqs=cert_reqs, timeout=timeout, retries=retries, **self._connection_properties
-                )
-            else:
-                http = PoolManager(cert_reqs=cert_reqs, maxsize=50, retries=retries, **self._connection_properties)
+            http = PoolManager(
+                cert_reqs=cert_reqs,
+                maxsize=50,
+                **self._connection_properties
+            )
 
         self._conn = http.request
 
