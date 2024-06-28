@@ -505,7 +505,7 @@ def json_traversal_delete_empty(data, old_key=None, _iter=None, remove_list=None
     :param old_key: key from previous recursive call (higher in stack)
     :type old_key: dictionary key
     :param _iter: iterator tracker for list (tracks iteration across
-    recursive calls)
+                  recursive calls)
     :type _iter: numerical iterator
     :param remove_list: list of items to be removed
     :type: list
