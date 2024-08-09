@@ -77,6 +77,8 @@ It must be placed in your working environment path.
  .. _ilorest_chif.dll: https://github.com/HewlettPackard/python-ilorest-library/releases/tag/v3.6.0.0/ilorest_chif.dll
  .. _ilorest_chif.so: https://github.com/HewlettPackard/python-ilorest-library/releases/tag/v3.6.0.0/ilorest_chif.so
 
+For Linux, the `hpilo` kernel module must be loaded as well.
+
 Usage
 ----------
 For usage documentation: https://hewlettpackard.github.io/python-ilorest-library/API-Overview.html
