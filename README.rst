@@ -116,6 +116,7 @@ History
   * 08/13/2019: Release of v2.5.2
   * 11/13/2019: Release of v3.0.0
   * 09/29/2022: Release of v3.6.0
+  * 10/14/2024: Release of v5.3.0.0
 
 Copyright and License
 ---------------------
