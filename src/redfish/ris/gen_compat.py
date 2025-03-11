@@ -60,6 +60,24 @@ class Typesandpathdefines(object):
         self.flagiften = False
         self.adminpriv = True
 
+    def iLO7VersionCheck(self,rootresp):
+        if "Oem" in rootresp:
+            if "Hpe" in rootresp["Oem"]:
+                gen = next(iter(rootresp.get("Oem", {}).get("Hpe", {}).get("Manager", {}))).get("ManagerType",
+                                                                                                None)
+            elif "Hp" in rootresp["Oem"]:
+                gen = next(iter(rootresp.get("Oem", {}).get("Hp", {}).get("Manager", {}))).get("ManagerType",
+                                                                                               None)
+            else:
+                raise Exception("Malformed Json")
+            if gen:
+                gen = gen.split(" ")[1]
+            else:
+                gen = rootresp.get("Oem", {}).get("Hpe", {}).get("Moniker", {}).get("PRODGEN").split(" ")[1]
+            if int(gen) == 7:
+                return True
+        return False
+
     def getgen(
         self,
         gen=None,
@@ -73,6 +91,7 @@ class Typesandpathdefines(object):
         isredfish=True,
         login_otp=None,
         log_dir=None,
+        session_location=None,
     ):
         """Function designed to verify the servers platform. Will generate the `Typeandpathdefines`
         variables based on the system type that is detected.
@@ -119,6 +138,7 @@ class Typesandpathdefines(object):
                     ca_cert_data=ca_cert_data,
                     login_otp=login_otp,
                     log_dir=log_dir,
+                    session_location=session_location,
                 )
                 client._get_root()
             except ServerDownOrUnreachableError as excp:
@@ -134,7 +154,8 @@ class Typesandpathdefines(object):
                         sessionid=sessionid,
                         proxy=proxy,
                         ca_cert_data=ca_cert_data,
-                        login_otp=login_otp
+                        login_otp=login_otp,
+                        session_location=session_location,
                     )
                     restclient._get_root()
                     # Check that the response is actually legacy rest and not a redirect
@@ -157,24 +178,33 @@ class Typesandpathdefines(object):
             rootresp = client.root.obj
             self.rootresp = rootresp
             client.logout()
-
-            self.gencompany = next(iter(self.rootresp.get("Oem", {}).keys()), None) in (
-                "Hpe",
-                "Hp",
-            )
-            comp = "Hp" if self.gencompany else None
-            comp = "Hpe" if rootresp.get("Oem", {}).get("Hpe", None) else comp
-            if comp and next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get("ManagerType", None):
-                self.ilogen = next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get("ManagerType")
-                self.ilover = next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get(
-                    "ManagerFirmwareVersion"
+            iLO7 = False
+            iLO7 = self.iLO7VersionCheck(rootresp)
+            if not iLO7:
+                self.gencompany = next(iter(self.rootresp.get("Oem", {}).keys()), None) in (
+                    "Hpe",
+                    "Hp",
                 )
-                if self.ilogen.split(" ")[-1] == "CM":
-                    # Assume iLO 4 types in Moonshot
-                    self.ilogen = 4
-                    self.iloversion = None
-                else:
-                    self.iloversion = float(self.ilogen.split(" ")[-1] + "." + "".join(self.ilover.split(".")))
+                comp = "Hp" if self.gencompany else None
+                comp = "Hpe" if rootresp.get("Oem", {}).get("Hpe", None) else comp
+                if comp and next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get("ManagerType", None):
+                    self.ilogen = next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get("ManagerType")
+                    self.ilover = next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get(
+                        "ManagerFirmwareVersion"
+                    )
+                    if self.ilogen.split(" ")[-1] == "CM":
+                        # Assume iLO 4 types in Moonshot
+                        self.ilogen = 4
+                        self.iloversion = None
+                    else:
+                        self.iloversion = float(self.ilogen.split(" ")[-1] + "." + "".join(self.ilover.split(".")))
+            else:
+                self.ilogen = next(iter(rootresp.get("Oem", {}).get("Hpe", {}).get("Manager", {}))).get("ManagerType")
+                self.ilover = next(iter(rootresp.get("Oem", {}).get("Hpe", {}).get("Manager", {}))).get(
+                    "ManagerFirmwareVersion",None)
+                if self.ilover is None:
+                    self.ilover = "1.01.01"
+                self.iloversion = float(self.ilogen.split(" ")[-1] + "." + "".join(self.ilover.split(".")))
         else:
             self.ilogen = int(gen)
 
@@ -206,7 +236,11 @@ class Typesandpathdefines(object):
         :param rootobj: The root path data.
         :type rootobj: dict.
         """
-        self.gencompany = next(iter(rootobj.get("Oem", {}).keys()), None) in ("Hpe", "Hp")
+        iLO7 = False
+        if self.iLO7VersionCheck(rootobj):
+            self.gencompany = "Hpe"
+        else:
+            self.gencompany = next(iter(rootobj.get("Oem", {}).keys()), None) in ("Hpe", "Hp")
         self.schemapath = (
             rootobj["JsonSchemas"]["@odata.id"]
             if rootobj.get("JsonSchemas", None)

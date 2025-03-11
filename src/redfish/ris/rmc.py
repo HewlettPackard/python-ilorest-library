@@ -67,6 +67,7 @@ from redfish.ris.utils import (
     warning_handler,
 )
 from redfish.ris.validation import Typepathforval, ValidationManager
+from redfish.hpilo.vnichpilo import AppAccount
 
 # ---------End of imports---------
 
@@ -218,6 +219,7 @@ class RmcApp(object):
         json_out=False,
         login_otp=None,
         log_dir=None,
+        session_location=None,
     ):
         """Performs a login on a the server specified by the keyword arguments. Will also create
         a monolith, client, and update the compatibility classes for the app instance. If base_url
@@ -263,6 +265,7 @@ class RmcApp(object):
             isredfish=is_redfish,
             login_otp=login_otp,
             log_dir=log_dir,
+            session_location=session_location
         )
         if user_ca_cert_data and self.typepath.iloversion < 5.23:
             raise IncompatibleiLOVersionError(
@@ -285,10 +288,15 @@ class RmcApp(object):
             ca_cert_data=user_ca_cert_data,
             login_otp=login_otp,
             log_dir=log_dir,
+            session_location=session_location,
         )
 
         self.current_client.login(self.current_client.auth_type)
-
+        resp = self.get_handler(self.typepath.defs.managerpath, service=False, silent=True).dict
+        ver = resp["FirmwareVersion"]
+        if "iLO" not in ver:
+            self.typepath.ilover = (ver.split(" ")[0])
+            self.typepath.ilover = float(self.typepath.ilover.replace('.', ''))
         inittime = time.time()
 
         self._build_monolith(path=path, includelogs=includelogs, skipbuild=skipbuild, json_out=json_out)
@@ -814,6 +822,7 @@ class RmcApp(object):
         silent=False,
         service=False,
         optionalpassword=None,
+        noauth=False,
     ):
         """Performs the client HTTP PATCH operation with monolith and response handling support.
         Response handling will output to logger or string depending on showmessages app argument.
@@ -841,7 +850,7 @@ class RmcApp(object):
         if optionalpassword:
             self.current_client.bios_password = optionalpassword
 
-        results = self.current_client.patch(put_path, body=body, headers=headers)
+        results = self.current_client.patch(put_path, body=body, headers=headers, noauth=noauth)
 
         if results and getattr(results, "status", None) and results.status == 401:
             raise SessionExpired()
@@ -870,6 +879,7 @@ class RmcApp(object):
         username=None,
         password=None,
         base_url=None,
+        noauth=False,
     ):
         """Performs the client HTTP GET operation with monolith and response handling support.
         Response handling will output to logger or string depending on showmessages app argument.
@@ -891,7 +901,7 @@ class RmcApp(object):
         :returns: A :class:`redfish.rest.containers.RestResponse` object
         """
         try:
-            results = self.current_client.get(get_path, headers=headers)
+            results = self.current_client.get(get_path, headers=headers, noauth=noauth)
         except UndefinedClientError:
             if sessionid:
                 self.redfishinst = RestClient(
@@ -899,6 +909,7 @@ class RmcApp(object):
                     username=username,
                     password=password,
                     base_url=base_url,
+                    noauth=noauth,
                 )
                 if not headers:
                     headers = dict()
@@ -942,7 +953,7 @@ class RmcApp(object):
 
         return results
 
-    def post_handler(self, put_path, body, headers=None, silent=False, service=False):
+    def post_handler(self, put_path, body, headers=None, silent=False, service=False, noauth=False):
         """Performs the client HTTP POST operation with monolith and response handling support.
         Response handling will output to logger or string depending on showmessages app argument.
 
@@ -964,7 +975,7 @@ class RmcApp(object):
         """
         (put_path, body) = self._checkpostpatch(body=body, path=put_path)
 
-        results = self.current_client.post(put_path, body=body, headers=headers)
+        results = self.current_client.post(put_path, body=body, headers=headers, noauth=noauth)
 
         if results and getattr(results, "status", None) and results.status == 401:
             raise SessionExpired()
@@ -988,6 +999,7 @@ class RmcApp(object):
         silent=False,
         optionalpassword=None,
         service=False,
+        noauth=False
     ):
         """Performs the client HTTP PUT operation with monolith and response handling support.
         Response handling will output to logger or string depending on showmessages app argument.
@@ -1012,7 +1024,7 @@ class RmcApp(object):
         """
         if optionalpassword:
             self.current_client.bios_password = optionalpassword
-        results = self.current_client.put(put_path, body=body, headers=headers)
+        results = self.current_client.put(put_path, body=body, headers=headers, noauth=noauth)
         if results and getattr(results, "status", None) and results.status == 401:
             raise SessionExpired()
 
@@ -1230,7 +1242,11 @@ class RmcApp(object):
             while isinstance(results, dict):
                 results = quickdrill(results, next(iter(results.keys())))
             iloversionlist = results.replace("v", "").replace(".", "").split(" ")
-            iloversion = float(".".join(iloversionlist[1:3]))
+            try:
+                iloversion = float(".".join(iloversionlist[1:3]))
+            except:
+                iloversion = float(iloversionlist[0])
+
 
             model = self.getprops("Manager.", ["Model"])
             if model:
@@ -1714,3 +1730,83 @@ class RmcApp(object):
             instances[inst.path] = inst.etag
 
         return [instances, instancepath]
+
+    # VNIC Functions
+    def generate_save_token(self, app_obj):
+        return app_obj.generate_and_save_apptoken()
+
+    def delete_token(self, app_obj):
+        return app_obj.remove_apptoken()
+
+    def token_exists(self, app_obj):
+        return app_obj.apptoken_exists()
+
+    def vnic_login(
+            self,
+            app_obj=None,
+            path=None,
+            skipbuild=False,
+            includelogs=False,
+            json_out=False,
+            base_url=None,
+            username=None,
+            password=None,
+            log_dir=None,
+            login_otp=None,
+            is_redfish=False,
+            proxy=None,
+            user_ca_cert_data=None,
+            biospassword=None,
+            sessionid=None,
+    ):
+        # Calling libhpsrv function to get session token
+        session_location = ""
+        if sessionid:
+            session_key = sessionid
+        else:
+            session_key, session_location = app_obj.vlogin()
+
+        if not session_key or not session_location:
+            raise Exception("Empty Session Id or Session Location was returned.\n")
+
+        self.login(
+            username=username,
+            password=password,
+            sessionid=session_key,
+            base_url=base_url,
+            path=path,
+            skipbuild=skipbuild,
+            includelogs=includelogs,
+            biospassword=biospassword,
+            is_redfish=is_redfish,
+            proxy=proxy,
+            user_ca_cert_data=user_ca_cert_data,
+            json_out=json_out,
+            login_otp=login_otp,
+            log_dir=log_dir,
+            session_location=session_location,
+        )
+
+    def vexists(self, app_obj):
+        # app_obj = Appaccount()
+        return app_obj.vnic_exists()
+
+    def getilover_beforelogin(self, app_obj):
+        # app_obj = Appaccount(appname=appname, appid=appid, username=username, password=password)
+        ilo_ver, securitystate = app_obj.version_beforelogin()
+        return ilo_ver, securitystate
+
+    def GetIPAddress(self):
+        app_obj = AppAccount()
+        IPAddr = app_obj.GetIPAddress()
+        if "https://" not in IPAddr:
+            IPAddr = "https://" + IPAddr
+        return IPAddr
+
+    def ListAppIds(self, app_obj):
+        appid_list_info = app_obj.CompareAppIds()
+        return appid_list_info
+
+    def ExpandAppId(self, app_obj, appid):
+        expand_app_id = app_obj.ExpandAppId(appid)
+        return expand_app_id

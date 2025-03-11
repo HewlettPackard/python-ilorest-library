@@ -119,7 +119,7 @@ class RestClientBase(object):
         """Base _get_req_headers function"""
         return headers if headers else {}
 
-    def get(self, path, args=None, headers=None):
+    def get(self, path, args=None, headers=None, noauth=False):
         """Perform a GET request
 
         :param path: The URI path.
@@ -135,13 +135,13 @@ class RestClientBase(object):
                 path,
                 method="GET",
                 args=args,
-                headers=self._get_req_headers(headers=headers),
+                headers=self._get_req_headers(headers=headers, noauth=noauth),
             )
         except ValueError:
             LOGGER.debug("Error in json object getting path: %s", path)
             raise JsonDecodingError("Error in json decoding.")
 
-    def patch(self, path, body, args=None, headers=None):
+    def patch(self, path, body, args=None, headers=None, noauth=False):
         """Perform a PATCH request
 
         :param path: The URI path.
@@ -159,10 +159,10 @@ class RestClientBase(object):
             body=body,
             method="PATCH",
             args=args,
-            headers=self._get_req_headers(headers=headers),
+            headers=self._get_req_headers(headers=headers, noauth=noauth),
         )
 
-    def post(self, path, body, args=None, headers=None):
+    def post(self, path, body, args=None, headers=None, noauth=False):
         """Perform a POST request
 
         :param path: The URI path.
@@ -180,10 +180,10 @@ class RestClientBase(object):
             body=body,
             method="POST",
             args=args,
-            headers=self._get_req_headers(headers=headers),
+            headers=self._get_req_headers(headers=headers, noauth=noauth),
         )
 
-    def put(self, path, body, args=None, headers=None):
+    def put(self, path, body, args=None, headers=None, noauth=False):
         """Perform a PUT request
 
         :param path: The URI path.
@@ -201,7 +201,7 @@ class RestClientBase(object):
             body=body,
             method="PUT",
             args=args,
-            headers=self._get_req_headers(headers=headers),
+            headers=self._get_req_headers(headers=headers, noauth=noauth),
         )
 
     def head(self, path, headers=None):
@@ -257,6 +257,7 @@ class RestClient(RestClientBase):
         auth=None,
         ca_cert_data=None,
         login_otp=None,
+        session_location=None,
         **client_kwargs
     ):
         """Create a Rest Client object"""
@@ -270,7 +271,8 @@ class RestClient(RestClientBase):
         self._cert_data = ca_cert_data
         self.login_otp = login_otp
         super(RestClient, self).__init__(
-            username=username, password=password, sessionid=sessionid, base_url=base_url, login_otp=login_otp, **client_kwargs
+            username=username, password=password, sessionid=sessionid, base_url=base_url, login_otp=login_otp,
+            session_location=session_location, **client_kwargs
         )
 
     def __enter__(self):
@@ -477,13 +479,19 @@ class RestClient(RestClientBase):
             self.login_response = respread
         else:
             self.session_key = self.connection.session_key
+            if self.connection.session_location:
+                self.session_location = self.connection.session_location
 
         if hasattr(self, "login_response") and self.login_response:
             if "OneTimePasscodeSent" in self.login_response:
                 raise OneTimePasscodeError()
             elif "UnauthorizedLogin" in self.login_response:
-                raise UnauthorizedLoginAttemptError("Error " + str(
-                    self.login_return_code) + ". Login is unauthorized.\nPlease check the credentials/OTP entered.\n")
+                if self.login_otp:
+                    raise UnauthorizedLoginAttemptError("Error " + str(
+                        self.login_return_code) + ". Login is unauthorized.\n"
+                                                  "Please check the credentials/OTP entered.\n")
+                else:
+                    self._credential_err()
             elif "TokenExpired" in self.login_response:
                 raise TokenExpiredError("Error " + str(
                     self.login_return_code) + ". The OTP entered has expired. Please enter credentials again.\n")
@@ -508,7 +516,7 @@ class RestClient(RestClientBase):
 
         raise InvalidCredentialsError(delay)
 
-    def _get_req_headers(self, headers=None, optionalpassword=None):
+    def _get_req_headers(self, headers=None, optionalpassword=None, noauth=False):
         """Get the request headers
 
         :param headers: additional headers to be utilized
@@ -519,6 +527,7 @@ class RestClient(RestClientBase):
         """
         headers = headers if isinstance(headers, dict) else dict()
         h_list = [header.lower() for header in headers]
+
         auth_headers = True if "x-auth-token" in h_list or "authorization" in h_list else False
 
         token = self._biospassword if self._biospassword else optionalpassword
@@ -526,15 +535,19 @@ class RestClient(RestClientBase):
             token = optionalpassword.encode("utf-8") if type(optionalpassword).__name__ in "basestr" else token
             hash_object = hashlib.new("SHA256")
             hash_object.update(token)
-            headers["X-HPRESTFULAPI-AuthToken"] = hash_object.hexdigest().upper()
+            if not noauth:
+                headers["X-HPRESTFULAPI-AuthToken"] = hash_object.hexdigest().upper()
 
         if self.session_key and not auth_headers:
-            headers["X-Auth-Token"] = self.session_key
+            if not noauth:
+                headers["X-Auth-Token"] = self.session_key
         elif self.basic_auth and not auth_headers:
-            headers["Authorization"] = self.basic_auth
+            if not noauth:
+                headers["Authorization"] = self.basic_auth
 
         if self.is_redfish:
-            headers["OData-Version"] = "4.0"
+            if not noauth:
+                headers["OData-Version"] = "4.0"
 
         return headers
 

@@ -141,6 +141,7 @@ class HttpConnection(object):
                 self._connection_properties.update({"ca_cert_data": cert_data})
         self._proxy = self._connection_properties.pop("proxy", None)
         self.session_key = self._connection_properties.pop("session_key", None)
+        self.session_location = self._connection_properties.pop("session_location", None)
         self.log_dir = self._connection_properties.pop("log_dir", None)
         self._init_connection()
 

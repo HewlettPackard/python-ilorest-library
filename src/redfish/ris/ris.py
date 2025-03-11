@@ -480,7 +480,7 @@ class RisMonolith(Dictable):
         :type path_refresh: bool
         """
         if init:
-            if LOGGER.getEffectiveLevel() == 40 and not json_out:
+            if LOGGER.getEffectiveLevel() >= 20 and not json_out:
                 sys.stdout.write("Discovering data...")
             else:
                 LOGGER.info("Discovering data...")
@@ -538,7 +538,7 @@ class RisMonolith(Dictable):
             )
 
         if init:
-            if LOGGER.getEffectiveLevel() == 40 and not json_out:
+            if LOGGER.getEffectiveLevel() >= 20 and not json_out:
                 sys.stdout.write("Done\n")
             else:
                 LOGGER.info("Done\n")
@@ -736,7 +736,7 @@ class RisMonolith(Dictable):
         jsonpath_expr = jsonpath_rw.parse('$.."$ref"')
         matches = jsonpath_expr.find(resp.dict)
         respcopy = resp.dict
-        typeregex = "([#,@].*?\.)"
+        typeregex = r"([#,@].*?\.)"
         if matches:
             for match in matches:
                 fullpath = str(match.full_path)
@@ -850,7 +850,7 @@ class RisMonolith(Dictable):
                     if not jsonfile:
                         replacepath = jsonpointer.JsonPointer(jsonpath)
                         schemapath = schemapath.replace("/$ref", "")
-                        if re.search("\[\d]", schemapath):
+                        if re.search(r"\[\d]", schemapath):
                             schemapath = schemapath.translate(str.maketrans("", "", "[]"))
                         schemapath = jsonpointer.JsonPointer(schemapath)
                         data = replacepath.resolve(respcopy)
@@ -911,7 +911,7 @@ class RisMonolith(Dictable):
                     newval = {"$ref": maxsch}
 
             itempath = "/" + getval(match.full_path)
-            if re.search("\[\d+]", itempath):
+            if re.search(r"\[\d+]", itempath):
                 itempath = itempath.translate(str.maketrans("", "", "[]"))
             itempath = jsonpointer.JsonPointer(itempath)
             del itempath.parts[-1]
@@ -947,7 +947,7 @@ class RisMonolith(Dictable):
                         if "anyOf" not in schemapath:
                             raise SchemaValidationError()
                         continue
-                    if re.search("\[\d+]", itempath):
+                    if re.search(r"\[\d+]", itempath):
                         itempath = itempath.translate(str.maketrans("", "", "[]"))
                     itempath = jsonpointer.JsonPointer(itempath)
                     del itempath.parts[-1]
@@ -960,7 +960,7 @@ class RisMonolith(Dictable):
 
                 if jsonpath:
                     schemapath = schemapath.replace("/$ref", "")
-                    if re.search("\[\d+]", schemapath):
+                    if re.search(r"\[\d+]", schemapath):
                         schemapath = schemapath.translate(str.maketrans("", "", "[]"))
                     if not jsonfile:
                         replacepath = jsonpointer.JsonPointer(jsonpath)
