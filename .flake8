@@ -1,0 +1,11 @@
+[flake8]
+max-line-length = 120
+extend-ignore = E203, E722, C901, E731
+exclude =
+	.git,
+    packaging,
+    __pycache__,
+	build,
+	dist,
+	docs
+max-complexity = 10

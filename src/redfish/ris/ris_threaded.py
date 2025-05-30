@@ -79,7 +79,10 @@ class LoadWorker(threading.Thread):
                     # Don't download schemas in crawl unless we are loading absolutely everything
                     self.queue.task_done()
                     continue
-                elif not includelogs and crawl:
+                elif path == "/" or "telemetry" in path.lower() or not path.startswith("/redfish/v1"):
+                    self.queue.task_done()
+                    continue
+                elif not includelogs:
                     # Only include logs when asked as there can be an extreme amount of entries
                     if "/log" in path.lower():
                         self.queue.task_done()

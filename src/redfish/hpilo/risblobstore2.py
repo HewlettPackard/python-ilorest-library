@@ -558,7 +558,7 @@ class BlobStore2(object):
                     LOGGER.warning(f"Max retries reached. Unable to delete blob key={key}. Raising Blob2OverrideError.")
                     raise Blob2OverrideError(errorcode)
             elif errorcode not in (BlobReturnCodes.SUCCESS, BlobReturnCodes.NOTMODIFIED):
-                LOGGER.error(f"Error during blob deletion: {errorcode}. Raising HpIloError.")
+                LOGGER.debug(f"Error during blob deletion: {errorcode}. Raising HpIloError.")
                 raise HpIloError(errorcode)
             else:
                 LOGGER.info(f"Blob deletion successful for key={key} in namespace={namespace}.")
@@ -1059,6 +1059,9 @@ class BlobStore2(object):
     @staticmethod
     def gethprestchifhandle():
         """Multi platform handle for chif hprest library"""
+        import platform
+        if platform.system() == "Darwin":
+            raise ChifDllMissingError()
         LOGGER.debug("Retrieving Chif library handle.")
         excp = None
         libhandle = None
@@ -1107,7 +1110,7 @@ class BlobStore2(object):
                     LOGGER.debug("Successfully loaded Chif library.")
                     BlobStore2.setglobalhprestchifrandnumber(libhandle)
                     return libhandle
-        LOGGER.error("Failed to load Chif library: %s", str(e))
+        LOGGER.debug("Failed to load Chif library: %s", str(excp))
         raise ChifDllMissingError(excp)
 
     @staticmethod

@@ -15,8 +15,8 @@
 ###
 # -*- coding: utf-8 -*-
 """Monolith database implementation. Crawls Redfish and Legacy REST implementations
-   and holds all data retrieved. The created database is called the **monolith** and referenced as
-   such in the code documentation."""
+and holds all data retrieved. The created database is called the **monolith** and referenced as
+such in the code documentation."""
 
 # ---------Imports---------
 
@@ -455,6 +455,7 @@ class RisMonolith(Dictable):
         loadcomplete=False,
         path_refresh=False,
         json_out=False,
+        single=True,
     ):
         """Walks the entire data model and caches all responses or loads an individual path into
         the monolith. Supports both threaded and sequential crawling.
@@ -489,7 +490,7 @@ class RisMonolith(Dictable):
         selectivepath = path
         if not selectivepath:
             selectivepath = self.client.default_prefix
-        if loadtype == "href" and not self.client.base_url.startswith("blobstore://."):
+        if loadtype == "href" and not self.client.base_url.startswith("blobstore://.") and not single:
             if not self.threads:
                 for _ in range(6):
                     workhand = LoadWorker(self.get_queue)
@@ -545,6 +546,65 @@ class RisMonolith(Dictable):
         if self.directory_load and init:
             self._populatecollections()
 
+    def loadallconfig(
+        self,
+        path=None,
+        includelogs=False,
+        init=False,
+        crawl=True,
+        loadtype="href",
+        loadcomplete=False,
+        path_refresh=False,
+        json_out=False,
+        single=True,
+    ):
+        """Walks the entire data model and caches all responses or loads an individual path into
+        the monolith. Supports both threaded and sequential crawling.
+
+        :param path: The path to start the crawl from the provided path if crawling or
+                     loads the path into monolith. If path is not included, crawl will start with
+                     the default. The default is */redfish/v1/* or */rest/v1* depending on if the
+                     system is Redfish or LegacyRest.
+        :type path: str.
+        :param includelogs: Flag to determine if logs should be downloaded as well in the crawl.
+        :type includelogs: bool
+        :param init: Flag to determine if this is the initial load.
+        :type init: bool
+        :param crawl: Flag to determine if load should crawl through found links.
+        :type crawl: bool
+        :param loadtype: Flag to determine if loading standard links: *href* or schema links: *ref*.
+        :type loadtype: str.
+        :param loadcomplete: Flag to download the entire data model including registries and
+                             schemas.
+        :type loadcomplete: bool
+        :param path_refresh: Flag to reload the path specified, clearing any patches and overwriting the
+                    current data in the monolith.
+        :type path_refresh: bool
+        """
+
+        selectivepath = path
+        if not selectivepath:
+            selectivepath = self.client.default_prefix
+        self._load(
+            selectivepath,
+            originaluri=None,
+            crawl=crawl,
+            includelogs=includelogs,
+            init=init,
+            loadtype=loadtype,
+            loadcomplete=loadcomplete,
+            path_refresh=path_refresh,
+            prevpath=None,
+        )
+
+        if init:
+            if LOGGER.getEffectiveLevel() >= 20 and not json_out:
+                sys.stdout.write("Done\n")
+            else:
+                LOGGER.info("Done\n")
+        if self.directory_load and init:
+            self._populatecollections()
+
     def _load(
         self,
         path,
@@ -580,7 +640,9 @@ class RisMonolith(Dictable):
         if (path.endswith("?page=1") or path.endswith(".json")) and not loadcomplete:
             # Don't download schemas in crawl unless we are loading absolutely everything
             return
-        elif not includelogs and crawl:
+        elif path == "/" or "telemetry" in path.lower() or not path.startswith("/redfish/v1"):
+            return
+        elif not includelogs:
             # Only include logs when asked as there can be an extreme amount of entries
             if "/log" in path.lower():
                 return
@@ -1090,22 +1152,54 @@ class RisMonolith(Dictable):
             colltype = ".".join(coll.split(".", 2)[:2]).split("#")[-1]
             self.colltypes[typename].add(colltype)
 
-    def capture(self, redmono=False):
-        """Crawls the server specified by the client and returns the entire monolith.
+    def capture(self, redmono=False, single=True):
+        """Crawls the server and returns the monolith data or just headers and responses.
 
-        :param redmono: Flag to return only the headers and responses instead of the entire monolith
-                        member data.
+        :param redmono: If True, returns only headers and responses; otherwise, returns full monolith data.
         :type redmono: bool
         :rtype: dict
         """
-        self.load(includelogs=True, crawl=True, loadcomplete=True, path_refresh=True, init=True)
-        return (
-            self.to_dict()
-            if not redmono
-            else {
-                x: {"Headers": v.resp.getheaders(), "Response": v.resp.dict} for x, v in list(self.paths.items()) if v
-            }
+        self.load(includelogs=False, crawl=True, loadcomplete=True, path_refresh=True, init=True, single=single)
+
+        if not redmono:
+            return self.to_dict()
+
+        ret = {}
+        try:
+            for x, v in self.paths.items():
+                if v:
+                    v_resp = v.resp
+                    if v_resp:
+                        ret[x] = {"Headers": v_resp.getheaders(), "Response": v_resp.dict}
+        except Exception as e:
+            LOGGER.debug("Error in capture: %s", e)
+            ret = {}
+        return ret
+
+    def captureallconfig(self, single=True, exclueurl=None):
+        """Crawls the server and returns the monolith data or just headers and responses.
+
+        :param redmono: If True, returns only headers and responses; otherwise, returns full monolith data.
+        :type redmono: bool
+        :rtype: dict
+        """
+        self.loadallconfig(
+            includelogs=False, crawl=True, loadcomplete=True, path_refresh=True, init=True, single=single
         )
+
+        ret = {}
+
+        try:
+            for x, v in self.paths.items():
+                if exclueurl.lower() not in x.lower():
+                    if v:
+                        v_resp = v.resp
+                        if v_resp:
+                            ret[x] = {"Headers": v_resp.getheaders(), "Response": v_resp.dict}
+        except Exception as e:
+            LOGGER.debug("Error in capture: %s", e)
+            ret = {}
+        return ret
 
     def killthreads(self):
         """Function to kill threads on logout"""
