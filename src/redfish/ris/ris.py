@@ -1176,6 +1176,42 @@ class RisMonolith(Dictable):
             ret = {}
         return ret
 
+    def normalize_urls(self, data):
+        """
+        Normalize URL-like dictionary keys:
+        - If both '/path' and '/path/' exist, keep only '/path/'.
+        - If only one version exists, ensure the key ends with '/'.
+        - All final keys end with '/'.
+        """
+        normalized_data = {}
+        seen = set()
+
+        for key in data:
+            # Normalize key with trailing slash
+            if key.endswith("/"):
+                base_key = key[:-1]
+                trailing_key = key
+            else:
+                base_key = key
+                trailing_key = key + "/"
+
+            # Avoid processing the same base path twice
+            if base_key in seen:
+                continue
+            seen.add(base_key)
+
+            # Prefer version with trailing slash
+            if trailing_key in data:
+                normalized_data[trailing_key] = data[trailing_key]
+            elif base_key in data:
+                normalized_data[trailing_key] = data[base_key]
+
+        return normalized_data
+
+    def fetch_data(self, path):
+        resp = self.client.get(path)
+        return resp
+
     def captureallconfig(self, single=True, exclueurl=None):
         """Crawls the server and returns the monolith data or just headers and responses.
 
@@ -1191,14 +1227,17 @@ class RisMonolith(Dictable):
 
         try:
             for x, v in self.paths.items():
-                if exclueurl.lower() not in x.lower():
+                if exclueurl.lower() != x.lower():
                     if v:
-                        v_resp = v.resp
-                        if v_resp:
-                            ret[x] = {"Headers": v_resp.getheaders(), "Response": v_resp.dict}
+                        if v.resp is not None:
+                            ret[x] = {"Headers": v.resp.getheaders(), "Response": v.resp.dict}
+                        else:
+                            resp = self.fetch_data(x)
+                            ret[x] = {"Headers": resp.getheaders(), "Response": resp.dict}
         except Exception as e:
             LOGGER.debug("Error in capture: %s", e)
             ret = {}
+        ret = self.normalize_urls(ret)
         return ret
 
     def killthreads(self):

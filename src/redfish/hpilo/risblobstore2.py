@@ -176,7 +176,6 @@ class BlobStore2(object):
     def __del__(self):
         """Blob store 2 close channel function"""
         if hasattr(self, "channel"):
-            LOGGER.info("Closing BlobStore channel.")
             self.channel.close()
 
     def create(self, key, namespace):
@@ -492,8 +491,8 @@ class BlobStore2(object):
 
         dataarr = bytearray(sendpacket)
         dataarr.extend(memoryview(data))
-
-        LOGGER.debug(f"Data to be sent: {dataarr[:50]}... (first 50 bytes)")
+        LOGGER.debug(f"Data ready to be sent...")
+        #LOGGER.debug(f"Data to be sent: {dataarr[:50]}... (first 50 bytes)")
 
         # Send the data
         try:

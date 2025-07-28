@@ -167,8 +167,8 @@ class HpIlo(object):
         """
         LOGGER.info("Starting chif packet exchange...")
 
-        # Log the data being sent (truncated if necessary for large data)
-        LOGGER.debug(f"Data to be sent: {data[:50]}... (first 50 bytes)")
+        LOGGER.debug(f"Data ready to be sent...")
+        #LOGGER.debug(f"Data to be sent: {data[:50]}... (first 50 bytes)")
 
         datarecv = self.dll.get_max_buffer_size()
         buff = create_string_buffer(bytes(data))
@@ -198,7 +198,8 @@ class HpIlo(object):
             pkt = bytearray(recbuff[:])
         else:
             pkt = bytearray(recbuff[:datarecv])
-            LOGGER.debug(f"Received data: {pkt[:50]}... (first 50 bytes)")
+            LOGGER.debug(f"Received data...")
+            #LOGGER.debug(f"Received data: {pkt[:50]}... (first 50 bytes)")
 
         return pkt
 
@@ -215,7 +216,7 @@ class HpIlo(object):
         sequence = struct.unpack("<H", bytes(data[2:4]))[0]
 
         if LOGGER.isEnabledFor(logging.DEBUG):
-            LOGGER.debug("Sending data: %s, retries: %d, initial sequence: %d", data, retries, sequence)
+            LOGGER.debug("Retries: %d, Initial sequence: %d", retries, sequence)
 
         while tries < retries:
             try:
@@ -226,7 +227,7 @@ class HpIlo(object):
 
                 # Log the response data for debugging (consider limiting if large)
                 if LOGGER.isEnabledFor(logging.DEBUG):
-                    LOGGER.debug("Received response: %s", resp)
+                    LOGGER.debug("Received response...")
 
                 # Check for matching sequence
                 received_sequence = struct.unpack("<H", bytes(resp[2:4]))[0]
