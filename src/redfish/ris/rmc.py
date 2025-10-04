@@ -220,7 +220,6 @@ class RmcApp(object):
         login_otp=None,
         log_dir=None,
         session_location=None,
-        cache=True,
     ):
         """Performs a login on a the server specified by the keyword arguments. Will also create
         a monolith, client, and update the compatibility classes for the app instance. If base_url
@@ -256,7 +255,6 @@ class RmcApp(object):
         :type is_redfish: bool
         """
 
-
         self.typepath.getgen(
             url=base_url,
             username=username,
@@ -269,25 +267,21 @@ class RmcApp(object):
             log_dir=log_dir,
             session_location=session_location
         )
-        if cache:
-            if user_ca_cert_data and self.typepath.iloversion < 5.23:
-                raise IncompatibleiLOVersionError(
-                    "Certificate based login is incompatible with this " "iLO version: %s\n" % self.typepath.iloversion
-                )
-            is_redfish = self.typepath.updatedefinesflag(redfishflag=is_redfish)
+        if user_ca_cert_data and self.typepath.iloversion < 5.23:
+            raise IncompatibleiLOVersionError(
+                "Certificate based login is incompatible with this " "iLO version: %s\n" % self.typepath.iloversion
+            )
+        is_redfish = self.typepath.updatedefinesflag(redfishflag=is_redfish)
 
-            if self.redfishinst and self.redfishinst.session_key:
-                self.logout()
-            def_prefix = self.typepath.defs.startpath
-        else:
-            def_prefix = "/redfish/v1"
+        if self.redfishinst and self.redfishinst.session_key:
+            self.logout()
 
         self.redfishinst = RestClient(
             base_url=base_url,
             username=username,
             password=password,
             session_key=sessionid,
-            default_prefix=def_prefix,
+            default_prefix=self.typepath.defs.startpath,
             biospassword=biospassword,
             is_redfish=is_redfish,
             proxy=proxy,
@@ -298,26 +292,25 @@ class RmcApp(object):
         )
 
         self.current_client.login(self.current_client.auth_type)
-        if cache:
-            resp = self.get_handler(self.typepath.defs.managerpath, service=False, silent=True).dict
-            ver = resp["FirmwareVersion"]
-            if "iLO" not in ver:
-                self.typepath.ilover = (ver.split(" ")[0])
-                self.typepath.ilover = float(self.typepath.ilover.replace('.', ''))
-            inittime = time.time()
+        resp = self.get_handler(self.typepath.defs.managerpath, service=False, silent=True).dict
+        ver = resp["FirmwareVersion"]
+        if "iLO" not in ver:
+            self.typepath.ilover = (ver.split(" ")[0])
+            self.typepath.ilover = float(self.typepath.ilover.replace('.', ''))
+        inittime = time.time()
 
-            self._build_monolith(path=path, includelogs=includelogs, skipbuild=skipbuild, json_out=json_out)
-            endtime = time.time()
+        self._build_monolith(path=path, includelogs=includelogs, skipbuild=skipbuild, json_out=json_out)
+        endtime = time.time()
 
-            if self.verbose > 1:
-                sys.stdout.write("Monolith build process time: %s\n" % (endtime - inittime))
-            self.save()
-            if not self.monolith:
-                self.monolith.update_member(
-                    resp=self.current_client.root,
-                    path=self.typepath.defs.startpath,
-                    init=False,
-                )
+        if self.verbose > 1:
+            sys.stdout.write("Monolith build process time: %s\n" % (endtime - inittime))
+        self.save()
+        if not self.monolith:
+            self.monolith.update_member(
+                resp=self.current_client.root,
+                path=self.typepath.defs.startpath,
+                init=False,
+            )
 
     def logout(self, url=None):
         """Performs a logout of the server and prepares the app for another system, setting app
@@ -886,6 +879,7 @@ class RmcApp(object):
         username=None,
         password=None,
         base_url=None,
+        stderr_flag=False,
         noauth=False,
     ):
         """Performs the client HTTP GET operation with monolith and response handling support.
@@ -927,7 +921,7 @@ class RmcApp(object):
             if not silent:
                 if hasattr(self.typepath.defs, "messageregistrytype"):
                     ResponseHandler(self.validationmanager, self.typepath.defs.messageregistrytype).output_resp(
-                        results, dl_reg=service, verbosity=self.verbose
+                        results, dl_reg=service, verbosity=self.verbose, stderr_flag=stderr_flag
                     )
                 else:
                     print_handler("[" + str(results.status) + "]" + " The operation completed successfully.\n")
@@ -937,7 +931,7 @@ class RmcApp(object):
             if not silent:
                 if hasattr(self.typepath.defs, "messageregistrytype"):
                     ResponseHandler(self.validationmanager, self.typepath.defs.messageregistrytype).output_resp(
-                        results, dl_reg=service, verbosity=self.verbose
+                        results, dl_reg=service, verbosity=self.verbose, stderr_flag=stderr_flag
                     )
                 else:
                     print_handler("[" + str(results.status) + "]" + " The operation completed successfully.\n")
@@ -953,7 +947,7 @@ class RmcApp(object):
         if not silent:
             if hasattr(self.typepath.defs, "messageregistrytype"):
                 ResponseHandler(self.validationmanager, self.typepath.defs.messageregistrytype).output_resp(
-                    results, dl_reg=service, verbosity=self.verbose
+                    results, dl_reg=service, verbosity=self.verbose, stderr_flag=stderr_flag
                 )
             else:
                 print_handler("[" + str(results.status) + "]" + " The operation completed successfully.\n")
@@ -991,6 +985,7 @@ class RmcApp(object):
 
         if results.status == 400 and results.dict is None:
             return results
+
         if not silent and hasattr(self.typepath.defs, "messageregistrytype"):
             ResponseHandler(self.validationmanager, self.typepath.defs.messageregistrytype).output_resp(
                 results, dl_reg=service, verbosity=self.verbose

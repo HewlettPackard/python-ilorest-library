@@ -51,7 +51,7 @@ LOGGER = logging.getLogger()
 # ---------End of debug logger---------
 
 
-def print_handler(msg):
+def print_handler(msg, stderr=False):
     """Helper function for handling warning messages appropriately. If LOGGER level is set to 40
     print out the warnings, else log them as a warning.
 
@@ -59,7 +59,10 @@ def print_handler(msg):
     :type msg: str
     """
     # if override:
-    sys.stdout.write(msg)
+    if not stderr:
+        sys.stdout.write(msg)
+    else:
+        sys.stderr.write(msg)
     # else:
     # if LOGGER.getEffectiveLevel() == 40:
     # LOGGER.warning(msg)

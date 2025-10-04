@@ -19,13 +19,16 @@
 
 # ---------Imports---------
 
+import os
+import sys
+import platform
+import sysconfig
 import logging
 import random
 import struct
 import string
-import sys
 import time
-import os
+import ctypes
 from ctypes import POINTER, c_char_p, c_ubyte, c_uint, c_ushort, c_void_p, cdll, create_string_buffer
 
 from redfish.hpilo.rishpilo import BlobReturnCodes as hpiloreturncodes
@@ -39,6 +42,10 @@ if os.name == "nt":
     from ctypes import windll
 else:
     from _ctypes import dlclose
+
+# Flags from <dlfcn.h> (Linux/Unix)
+RTLD_LAZY = 0x00001
+RTLD_GLOBAL = 0x00100
 
 # ---------End of imports---------
 # ---------Debug logger---------
@@ -1057,60 +1064,81 @@ class BlobStore2(object):
 
     @staticmethod
     def gethprestchifhandle():
-        """Multi platform handle for chif hprest library"""
-        import platform
+        """Multi-platform handle for Chif hprest library"""
+
         if platform.system() == "Darwin":
             raise ChifDllMissingError()
+
         LOGGER.debug("Retrieving Chif library handle.")
         excp = None
         libhandle = None
-        if os.name != "nt":
+        arch = platform.machine().lower()
+        is_windows = os.name == "nt"
+
+        def load_with_flags(path):
+            """Load library using RTLD_LAZY | RTLD_GLOBAL to match dlopen behavior."""
+            return ctypes.CDLL(path, mode=RTLD_LAZY | RTLD_GLOBAL)
+
+        # 1. Try fixed path on Linux
+        if not is_windows:
             libpath = "/opt/ilorest/lib64/libilorestchif.so"
             if os.path.isfile(libpath):
-                libhandle = cdll.LoadLibrary(libpath)
+                try:
+                    libhandle = load_with_flags(libpath)
+                except Exception as exp:
+                    excp = exp
+
+        # 2. Try current directory for known filenames
         if not libhandle:
-            libnames = (
-                ["ilorest_chif.dll"]
-                if os.name == "nt"
-                else [
-                    "ilorest_chif_dev.so",
-                    "ilorest_chif.so",
-                ]
-            )
+            libnames = ["ilorest_chif.dll"] if is_windows else ["ilorest_chif_dev.so", "ilorest_chif.so"]
             for libname in libnames:
                 try:
                     libpath = BlobStore2.checkincurrdirectory(libname)
-                    # LOGGER.debug("Loading Library %s for libhpsrv", libpath)
-                    libhandle = cdll.LoadLibrary(libpath)
+                    libhandle = load_with_flags(libpath)
                     if libhandle:
-                        # LOGGER.debug("Got Libhandle %s for libhpsrv", libhandle)
                         break
                 except Exception as exp:
                     excp = exp
 
+        # 3. Try locating from installed site-packages
+        if not libhandle:
+            try:
+                site_packages = [sysconfig.get_paths()["purelib"]]
+            except Exception as exp:
+                LOGGER.debug("Failed to get site-packages path: %s", str(exp))
+                site_packages = []
+
+            for package in site_packages:
+                try:
+                    # Base chif library path
+                    chif_dir = os.path.join(package, "ilorest", "chiflibrary")
+
+                    if is_windows:
+                        chif_lib_name = "ilorest_chif.dll"
+                        libpath = os.path.join(chif_dir, chif_lib_name)
+                    else:
+                        chif_lib_name = "ilorest_chif.so"
+                        libpath = os.path.join(chif_dir, chif_lib_name)
+
+                        # Try arch-specific subfolder as fallback
+                        if arch in ("aarch64", "arm64"):
+                            libpath = os.path.join(chif_dir, "arm", chif_lib_name)
+
+                    if os.path.isfile(libpath):
+                        libhandle = load_with_flags(libpath)
+                        if libhandle:
+                            break
+                except Exception as exp:
+                    excp = exp
+
+        # Final result
         if libhandle:
             LOGGER.debug("Successfully loaded Chif library.")
             BlobStore2.setglobalhprestchifrandnumber(libhandle)
             return libhandle
         else:
-            import site
-
-            site_packages = site.getsitepackages()
-            for package in site_packages:
-                try:
-                    if os.name != "nt":
-                        libpath = os.path.join(package, "ilorest", "chiflibrary", "ilorest_chif.so")
-                    else:
-                        libpath = os.path.join(package, "ilorest", "chiflibrary", "ilorest_chif.dll")
-                    libhandle = cdll.LoadLibrary(libpath)
-                except Exception as exp:
-                    excp = exp
-                if libhandle:
-                    LOGGER.debug("Successfully loaded Chif library.")
-                    BlobStore2.setglobalhprestchifrandnumber(libhandle)
-                    return libhandle
-        LOGGER.debug("Failed to load Chif library: %s", str(excp))
-        raise ChifDllMissingError(excp)
+            LOGGER.debug("Failed to load Chif library: %s", str(excp))
+            raise ChifDllMissingError(excp)
 
     @staticmethod
     def setglobalhprestchifrandnumber(libbhndl):

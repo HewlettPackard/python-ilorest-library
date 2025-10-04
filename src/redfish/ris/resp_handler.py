@@ -58,7 +58,7 @@ class ResponseHandler(object):
         self.validation_mgr = validaition_mgr
         self.msg_reg_type = msg_type
 
-    def output_resp(self, response, dl_reg=False, verbosity=1):
+    def output_resp(self, response, dl_reg=False, verbosity=1, stderr_flag=False):
         """Prints or logs parsed MessageId response. Will raise an IloResponseError or return
         a list of message response data which includes the information returned from
         message_handler.
@@ -81,10 +81,13 @@ class ResponseHandler(object):
 
         if response.status < 300 and (response._rest_request.method == "GET" or not response.read):
             # for rawget
+            if verbosity == 0:
+                verbosity = 1
             print_handler(
                 self.verbosity_levels(
                     message=message_text, response_status=response.status, verbosity=verbosity, dl_reg=dl_reg
-                )
+                ),
+                stderr_flag,
             )
         elif response.status == 401:
             raise SessionExpired()
@@ -107,6 +110,7 @@ class ResponseHandler(object):
                 verbosity=verbosity,
                 message_text=message_text,
                 dl_reg=dl_reg,
+                stderr_flag=stderr_flag,
             )
         if response.status == 400:
             results = response.dict["error"]["@Message.ExtendedInfo"]
@@ -120,7 +124,7 @@ class ResponseHandler(object):
         else:
             return retdata
 
-    def message_handler(self, response_data, verbosity=0, message_text="No Response", dl_reg=False):
+    def message_handler(self, response_data, verbosity=0, message_text="No Response", dl_reg=False, stderr_flag=False):
         """Prints or logs parsed MessageId response based on verbosity level and returns the
         following message information in a list:
 
@@ -185,7 +189,8 @@ class ResponseHandler(object):
                             response_status,
                             verbosity,
                             dl_reg,
-                        )
+                        ),
+                        stderr_flag,
                     )
                     retlist.append(inst)
         except Exception:

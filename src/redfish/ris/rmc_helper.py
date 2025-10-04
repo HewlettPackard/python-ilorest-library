@@ -245,11 +245,7 @@ class RmcFileCacheManager(RmcCacheManager):
                 for index in index_cache:
                     if url:
                         if url in index["url"]:
-                            if os.path.isdir(cachedir):
-                                file_path = os.path.join(cachedir, index["href"])
-                                if os.path.exists(file_path):
-                                    os.remove(file_path)
-                            #os.remove(os.path.join(cachedir, index["href"]))
+                            os.remove(os.path.join(cachedir, index["href"]))
                             break
                     else:
                         if os.path.isfile(os.path.join(cachedir, index["href"])):
@@ -273,11 +269,8 @@ class RmcFileCacheManager(RmcCacheManager):
                                             self._rmc._cm.decodefunct(data["login"]["session_key"]),
                                         )
                                     )
-                        if os.path.isdir(cachedir):
-                            file_path = os.path.join(cachedir, index["href"])
-                            if os.path.exists(file_path):
-                                os.remove(file_path)
-                        #os.remove(os.path.join(cachedir, index["href"]))
+
+                        os.remove(os.path.join(cachedir, index["href"]))
             except BaseException as excp:
                 LOGGER.warning("Unable to read cache data %s", excp)
 
