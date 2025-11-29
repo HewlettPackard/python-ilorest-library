@@ -19,7 +19,7 @@ An example of manually managing sessions with Redfish
 
 import sys
 import json
-from six.moves import urllib
+import urllib.parse
 from redfish import RedfishClient
 from redfish.rest.v1 import ServerDownOrUnreachableError
 

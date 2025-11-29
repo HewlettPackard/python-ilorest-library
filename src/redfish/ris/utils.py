@@ -21,10 +21,7 @@ import logging
 import re
 import sys
 
-import six
-
-if six.PY3:
-    from functools import reduce
+from functools import reduce
 
 try:
     from collections import Mapping
@@ -32,16 +29,8 @@ except ImportError:
     from collections.abc import Mapping
 
 import jsonpath_rw
-from six import iterkeys, string_types
 
 from redfish.ris.rmc_helper import IncorrectPropValue
-
-try:
-    # itertools ifilter compatibility for python 2
-    from future_builtins import filter
-except ImportError:
-    # filter function provides the same functionality in python 3
-    pass
 
 # ---------Debug logger---------
 
@@ -242,7 +231,7 @@ def navigatejson(selector, currdict, val=None):
     # TODO: Check for val of different types(bool, int, etc)
     temp_dict = dict()
     createdict = lambda y, x: {x: y}
-    getkey = lambda cdict, sel: next((item for item in iterkeys(cdict) if sel.lower() == item.lower()), sel)
+    getkey = lambda cdict, sel: next((item for item in cdict.keys() if sel.lower() == item.lower()), sel)
     getval = lambda cdict, sele: [cdict[sel] if sel in cdict else "~!@#$%^&*)()" for sel in [getkey(cdict, sele)]][0]
     fullbreak = False
     seldict = copy.deepcopy(currdict)
@@ -413,14 +402,14 @@ def diffdict(newdict=None, oridict=None, settingskipped=[False]):
                         newdict[key][0] = res
                     else:
                         del newdict[key]
-            if [li for li in val if not isinstance(li, string_types)]:
+            if [li for li in val if not isinstance(li, str)]:
                 continue
             else:
                 if val:
                     if [va.lower() for va in val] == [va.lower() if va else va for va in oridict[key]]:
                         del newdict[key]
         # TODO: check if lowercase is correct or buggy for string types
-        elif isinstance(val, (string_types, int, type(None))):
+        elif isinstance(val, (str, int, type(None))):
             if newdict[key] == oridict[key]:
                 del newdict[key]
     if not newdictlist:

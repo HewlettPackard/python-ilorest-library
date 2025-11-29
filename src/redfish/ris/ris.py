@@ -26,9 +26,6 @@ import sys
 import threading
 from re import error as regexerr
 
-# Added for py3 compatibility
-import six
-
 try:
     from collections import OrderedDict, defaultdict
 except ImportError:
@@ -39,9 +36,9 @@ from queue import Queue
 import jsonpath_rw
 import jsonpointer
 from jsonpointer import set_pointer
-from six.moves.urllib.parse import urlparse, urlunparse
-from six.moves.urllib.parse import ParseResult
-from six.moves.urllib.parse import quote
+from urllib.parse import urlparse, urlunparse
+from urllib.parse import ParseResult
+from urllib.parse import quote
 
 from redfish.rest.containers import RestRequest, StaticRestResponse
 from redfish.ris.ris_threaded import LoadWorker
@@ -743,7 +740,7 @@ class RisMonolith(Dictable):
 
                     if match.value == path:
                         continue
-                    elif not isinstance(match.value, six.string_types):
+                    elif not isinstance(match.value, str):
                         continue
 
                     href = "%s" % match.value
@@ -775,7 +772,7 @@ class RisMonolith(Dictable):
                 smatches = schemamatch.find(resp.dict)
                 matches = matches + smatches
                 for match in matches:
-                    if isinstance(match.value, six.string_types):
+                    if isinstance(match.value, str):
                         self._load(
                             match.value,
                             crawl=crawl,
@@ -881,7 +878,7 @@ class RisMonolith(Dictable):
 
                                 for val in vals:
                                     try:
-                                        if "$ref" in six.iterkeys(end.resolve(val)):
+                                        if "$ref" in end.resolve(val).keys():
                                             end.resolve(val).pop("$ref")
                                             end.resolve(val).update(dictcopy)
                                             replace_pointer = jsonpointer.JsonPointer(end.path + jsonpath)
@@ -898,7 +895,7 @@ class RisMonolith(Dictable):
                                 del itempath.parts[-1]
 
                                 try:
-                                    if "$ref" in six.iterkeys(itempath.resolve(respcopy)):
+                                    if "$ref" in itempath.resolve(respcopy).keys():
                                         itempath.resolve(respcopy).pop("$ref")
                                         itempath.resolve(respcopy).update(dictcopy)
                                         break
@@ -977,7 +974,7 @@ class RisMonolith(Dictable):
                 itempath = itempath.translate(str.maketrans("", "", "[]"))
             itempath = jsonpointer.JsonPointer(itempath)
             del itempath.parts[-1]
-            if "anyOf" in six.iterkeys(itempath.resolve(respcopy)):
+            if "anyOf" in itempath.resolve(respcopy).keys():
                 itempath.resolve(respcopy).pop("anyOf")
                 itempath.resolve(respcopy).update(newval)
 
@@ -1014,7 +1011,7 @@ class RisMonolith(Dictable):
                     itempath = jsonpointer.JsonPointer(itempath)
                     del itempath.parts[-1]
                     try:
-                        if "$ref" in six.iterkeys(itempath.resolve(respcopy)):
+                        if "$ref" in itempath.resolve(respcopy).keys():
                             itempath.resolve(respcopy).pop("$ref")
                             itempath.resolve(respcopy).update(item.dict)
                     except jsonpointer.JsonPointerException:

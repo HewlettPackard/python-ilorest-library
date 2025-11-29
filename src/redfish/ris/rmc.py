@@ -26,8 +26,6 @@ import shutil
 import sys
 import time
 
-import six
-
 try:
     from collections import OrderedDict
 except ImportError:
@@ -372,7 +370,7 @@ class RmcApp(object):
             raise NothingSelectedError()
         selector = self.typepath.modifyselectorforgen(selector)
         instances = self._getinstances(selector=selector, path_refresh=path_refresh)
-        val = fltrvals[1].strip("'\"") if isinstance(fltrvals[1], six.string_types) else fltrvals[1]
+        val = fltrvals[1].strip("'\"") if isinstance(fltrvals[1], str) else fltrvals[1]
         instances = [
             inst
             for inst in instances
@@ -482,7 +480,7 @@ class RmcApp(object):
             _ = self.removereadonlyprops(currdict, emptyraise=True) if remread else None
             temp_dict = dict()
             if props:
-                if isinstance(props, six.string_types):
+                if isinstance(props, str):
                     props = [props]
                 for prop in props:
                     copydict = copy.deepcopy(currdict)
@@ -542,7 +540,7 @@ class RmcApp(object):
                 model, bsmodel = self.get_model(currdict, attributeregistry, latestschema, proppath=proppath)
                 results = model
                 break
-            if isinstance(props, six.string_types):
+            if isinstance(props, str):
                 props = props.split("/") if "/" in props else props
                 props = [props] if not isinstance(props, (list, tuple)) else props
                 seldict = navigatejson(props, copy.deepcopy(currdict))

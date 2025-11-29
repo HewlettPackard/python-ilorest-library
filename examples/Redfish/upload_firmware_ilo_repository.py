@@ -89,8 +89,8 @@ if __name__ == "__main__":
     # "https://10.0.0.0"
     # "https://ilo.hostname"
     SYSTEM_URL = "https://10.0.0.0"
-    LOGIN_ACCOUNT = "admin
-    LOGIN_PASSWORD = "password
+    LOGIN_ACCOUNT = "admin"
+    LOGIN_PASSWORD = "password"
 
     # The path to the firmware file to upload
     FIRMWARE_PATH = "/path/to/component.exe"
