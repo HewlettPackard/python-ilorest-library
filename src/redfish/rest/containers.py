@@ -18,13 +18,13 @@
 """Containers used for REST requests and responses."""
 import json
 import sys
+from io import BytesIO, StringIO
 
 try:
     from collections import OrderedDict
 except ImportError:
     from collections.abc import OrderedDict
 
-from six import BytesIO, StringIO, string_types, text_type
 from six.moves import http_client
 from urllib3.util import Timeout, Retry
 
@@ -183,7 +183,7 @@ class RestResponse(object):
     @property
     def read(self):
         """The response body, attempted to be translated into json, else is a string."""
-        if self._read and not isinstance(self._read, text_type):
+        if self._read and not isinstance(self._read, str):
             self._read = self._read.decode("utf-8", "ignore")
         return self._read
 
@@ -313,7 +313,7 @@ class RisRestResponse(RestResponse):
 
     def __init__(self, rest_request, resp_txt):
         """Initialization of RisRestResponse"""
-        if not isinstance(resp_txt, string_types):
+        if not isinstance(resp_txt, str):
             resp_txt = "".join(map(chr, resp_txt))
         self._respfh = StringIO(resp_txt)
         self._socket = _FakeSocket(bytearray(list(map(ord, self._respfh.read()))))
@@ -354,7 +354,7 @@ class StaticRestResponse(RestResponse):
         if "Content" in kwargs:
             content = kwargs["Content"]
 
-            if isinstance(content, string_types):
+            if isinstance(content, str):
                 self._read = content
             else:
                 self._read = json.dumps(content)

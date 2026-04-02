@@ -31,9 +31,8 @@ try:
 except ImportError:
     pass
 
-import six
-from six import BytesIO
-from six.moves.urllib.parse import urlencode, urlparse
+from io import BytesIO
+from urllib.parse import urlencode, urlparse
 
 from redfish.hpilo.risblobstore2 import (
     Blob2OverrideError,
@@ -242,7 +241,7 @@ class HttpConnection(object):
                         gfile = gzip.GzipFile(mode="wb", fileobj=buf)
 
                         try:
-                            gfile.write(str(body).encode("utf-8") if six.PY3 else str(body))
+                            gfile.write(str(body).encode("utf-8"))
                         finally:
                             gfile.close()
 
@@ -300,7 +299,7 @@ class HttpConnection(object):
         reqfullpath = self.base_url + reqpath if not external_uri else reqpath
 
         # To ensure we don't have unicode/string merging issues in httplib of Python 2
-        if isinstance(reqfullpath, six.text_type):
+        if isinstance(reqfullpath, str):
             reqfullpath = str(reqfullpath)
 
         if headers:
@@ -468,7 +467,7 @@ class Blobstore2Connection(object):
                         gfile = gzip.GzipFile(mode="wb", fileobj=buf)
 
                         try:
-                            gfile.write(str(body).encode("utf-8") if six.PY3 else str(body))
+                            gfile.write(str(body).encode("utf-8"))
                         finally:
                             gfile.close()
 

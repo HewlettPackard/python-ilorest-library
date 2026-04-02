@@ -23,7 +23,7 @@ import base64
 import hashlib
 import logging
 import sys
-from six.moves.urllib.parse import urlparse
+from urllib.parse import urlparse
 
 from redfish.rest.connections import (
     Blobstore2Connection,

@@ -24,8 +24,6 @@ import logging
 import re
 import textwrap
 
-import six
-
 from redfish.rest.containers import RisObject
 
 from .sharedtypes import JSONEncoder
@@ -838,7 +836,7 @@ class EnumValidator(BaseValidator):
                     possibleval
                     and (
                         isinstance(possibleval, type(newval))
-                        or (isinstance(possibleval, six.string_types) and isinstance(newval, six.string_types))
+                        or (isinstance(possibleval, str) and isinstance(newval, str))
                     )
                     and possibleval.lower() == str(newval).lower()
                 ):
@@ -1171,7 +1169,7 @@ class ObjectValidator(BaseValidator):
         """
         # TODO: need to add logic for true postive and false negatives.
         result = list()
-        if isinstance(newval[0], (dict, six.string_types, int)):
+        if isinstance(newval[0], (dict, str, int)):
             result.append(
                 RegistryValidationError(
                     "'%s' is not a valid setting for '%s'" % (newval[0], name),

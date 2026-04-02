@@ -20,12 +20,9 @@
 import logging
 import threading
 from queue import Empty
+from urllib.parse import urlparse, urlunparse
 
 import jsonpath_rw
-
-# Added for py3 compatibility
-import six
-from six.moves.urllib.parse import urlparse, urlunparse
 
 import redfish.ris
 
@@ -196,7 +193,7 @@ class LoadWorker(threading.Thread):
 
                         if match.value == path:
                             continue
-                        elif not isinstance(match.value, six.string_types):
+                        elif not isinstance(match.value, str):
                             continue
 
                         href = "%s" % match.value
@@ -236,7 +233,7 @@ class LoadWorker(threading.Thread):
                     smatches = schemamatch.find(resp.dict)
                     matches = matches + smatches
                     for match in matches:
-                        if isinstance(match.value, six.string_types):
+                        if isinstance(match.value, str):
                             theobj.get_queue.put(
                                 (
                                     match.value,
