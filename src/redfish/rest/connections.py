@@ -39,6 +39,7 @@ from redfish.hpilo.risblobstore2 import (
     Blob2OverrideError,
     Blob2SecurityError,
     BlobStore2,
+    HpIloError,
 )
 from redfish.hpilo.rishpilo import HpIloChifPacketExchangeError
 from redfish.rest.containers import RestRequest, RestResponse, RisRestResponse
@@ -385,20 +386,20 @@ class Blobstore2Connection(object):
     def __init__(self, **conn_kwargs):
         self._conn = None
         self.base_url = "blobstore://."
-        self._connection_properties = conn_kwargs
+        self._connection_properties = dict(conn_kwargs)
         self.session_key = self._connection_properties.pop("sessionid", None)
         self._init_connection(**self._connection_properties)
 
     def _init_connection(self, **kwargs):
         """Initiate blobstore connection"""
         # mixed security modes require a password at all times
-        username = kwargs.pop("username", "nousername")
+        username = kwargs.get("username", "nousername")
         if isinstance(username, bytes):
             username = username.decode("utf-8")
-        password = kwargs.pop("password", "nopassword")
+        password = kwargs.get("password", "nopassword")
         if isinstance(password, bytes):
             password = password.decode("utf-8")
-        log_dir = kwargs.pop("log_dir", "")
+        log_dir = kwargs.get("log_dir", "")
         try:
             correctcreds = BlobStore2.initializecreds(username=username, password=password, log_dir=log_dir)
             bs2 = BlobStore2(log_dir=log_dir, username=username, password=password)
@@ -540,6 +541,7 @@ class Blobstore2Connection(object):
 
         inittime = time.time()
 
+        resp_txt = None
         for idx in range(5):
             try:
                 resp_txt = self._conn.rest_immediate(str1)
@@ -547,8 +549,23 @@ class Blobstore2Connection(object):
             except Blob2OverrideError:
                 if idx == 4:
                     raise Blob2OverrideError(2)
-                else:
-                    continue
+                continue
+            except HpIloChifPacketExchangeError as excp:
+                LOGGER.warning("CHIF packet exchange error on attempt %d: %s", idx + 1, str(excp))
+                if idx == 4:
+                    raise
+                try:
+                    self._init_connection(**self._connection_properties)
+                except Exception as reinit_excp:
+                    LOGGER.error("Failed to reinitialize CHIF connection: %s", str(reinit_excp))
+                time.sleep(1)
+                continue
+            except (HpIloError, Exception) as excp:
+                LOGGER.warning("Error during rest_immediate on attempt %d: %s", idx + 1, str(excp))
+                if idx == 4:
+                    raise
+                time.sleep(1)
+                continue
 
         endtime = time.time()
 

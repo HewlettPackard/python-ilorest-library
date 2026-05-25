@@ -119,7 +119,7 @@ class ValidationManager(object):
                 self._classpaths.append(instance.path)
                 self._classes.append(instance.resp.dict)
 
-    def find_prop(self, propname, latestschema=False, proppath=None):
+    def find_prop(self, propname, proppath=None):
         """Searches through all locations and returns the schema
         found for the provided propname type.
 
@@ -127,15 +127,12 @@ class ValidationManager(object):
         :type propname: str
         :param proppath: String containing the schema path if you wish to use that instead.
         :type proppath: str
-        :param latestschema: Flag to determine if we should drop the schema version when we try to
-                             match schema information. If True, the version will be dropped.
-        :type latestschema: bool
         """
         if proppath:
             self.monolith.load(path=proppath, crawl=False, loadtype="ref")
             return True
         for cls in self._classes:
-            found = self.find_property(propname, cls=cls, latestschema=latestschema)
+            found = self.find_property(propname, cls=cls)
             if found:
                 return found
         return None
@@ -181,15 +178,13 @@ class ValidationManager(object):
                 for item in items[membername]:
                     yield item
 
-    def find_property(self, propname, cls=None, latestschema=False):
+    def find_property(self, propname, cls=None):
         """Returns iLO/BIOS registries/schemas
 
         :param propname: string containing the registry/schema name.
         :type propname: str
         :param cls: self._classes list of dictionaries.
         :type cls: list
-        :param latestschema: flag to drop the versioning in the type string.
-        :type latestschema: bool.
 
         :returns: iLO/BIOS registries/schemas that match the supplied name.
         """
@@ -199,7 +194,6 @@ class ValidationManager(object):
         keyword = "Schema"
         if dataloc and isinstance(dataloc, list):
             _ = propname.split(".")[0].strip("#")
-            propname = propname.split(".")[0].strip("#") if latestschema else propname
             for entry in dataloc:
                 if entry:
                     if "Schema" in entry:
@@ -255,7 +249,6 @@ class ValidationManager(object):
         tdict,
         currtype=None,
         proppath=None,
-        latestschema=False,
         searchtype=None,
         monolith=None,
         reg=None,
@@ -270,9 +263,6 @@ class ValidationManager(object):
         :param proppath: String containing the schema path of the tdict dictionary if you wish to
                          use that instead.
         :type proppath: str
-        :param latestschema: Flag to determine if we should drop the schema version when we try to
-                             match schema information. If True, the version will be dropped.
-        :type latestschema: bool
         :param searchtype: Include the attribute registry of you are validating a bios registry.
         :type searchtype: str
         :param monolith: Full data model retrieved from server.
@@ -289,7 +279,6 @@ class ValidationManager(object):
                 currtype=currtype,
                 searchtype=searchtype,
                 proppath=proppath,
-                latestschema=latestschema,
             )
 
         if reg:
@@ -401,7 +390,6 @@ class ValidationManager(object):
         getmsg=False,
         searchtype=None,
         newarg=None,
-        latestschema=False,
     ):
         """Loads the schema file and find the registry model if available. A registry model is a
         object built for schema/bios registry data.
@@ -416,19 +404,15 @@ class ValidationManager(object):
         :type searchtype: str
         :param newarg: List of multi level properties to be modified.
         :type newarg: list
-        :param latestschema: Flag to determine if we should drop the schema version when we try to
-                             match schema information. If True, the version will be dropped.
-        :type latestschema: bool
         :returns: Schema in object form called a registry object.
         """
         regdict = None
         monolith = self.monolith
-        currtype = currtype.split("#")[-1].split(".")[0] + "." if currtype and latestschema else currtype
+        currtype = currtype.split("#")[-1].split(".")[0] + "." if currtype else currtype
         if (
             not currtype
             or not self.find_prop(
                 currtype,
-                latestschema=latestschema,
                 proppath=proppath if not searchtype else None,
             )
         ) and (not searchtype):

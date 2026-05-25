@@ -119,7 +119,7 @@ class HpIlo(object):
             self.dll.enabledebugoutput.argtypes = [c_char_p]
             if log_dir is not None:
                 # Rotate rest.debug.log if it exceeds size threshold
-                RestDebugLogRotator.rotate_rest_debug_log(log_dir, max_size_mb=2.0, max_backups=3)
+                RestDebugLogRotator.rotate_rest_debug_log(log_dir, max_size_mb=2, max_backups=3)
 
                 logdir_c = create_string_buffer(log_dir.encode("UTF-8"))
                 LOGGER.debug("Enabling debug output with log directory: %s", log_dir)
@@ -150,6 +150,8 @@ class HpIlo(object):
                         errmsg = "chif"
                     elif status == BlobReturnCodes.CHIFERR_AccessDenied:
                         errmsg = "You must be root/Administrator to use this program."
+                    elif status == 8:
+                        errmsg = "Ilo is in secure mode"
                     LOGGER.error("Ping failed: %s", errmsg)
                     raise HpIloInitialError(errmsg)
 
@@ -277,7 +279,7 @@ class HpIlo(object):
     def close(self):
         """Chif close function"""
         try:
-            if self.fhandle is not None:
+            if getattr(self, "fhandle", None) is not None:
                 LOGGER.debug("Calling ChifClose...")
                 self.dll.ChifClose(self.fhandle)
                 self.fhandle = None

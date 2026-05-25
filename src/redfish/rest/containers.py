@@ -17,7 +17,7 @@
 # -*- coding: utf-8 -*-
 """Containers used for REST requests and responses."""
 import json
-import sys
+import logging
 
 try:
     from collections import OrderedDict
@@ -27,6 +27,8 @@ except ImportError:
 from six import BytesIO, StringIO, string_types, text_type
 from six.moves import http_client
 from urllib3.util import Timeout, Retry
+
+LOGGER = logging.getLogger(__name__)
 
 
 class JSONEncoder(json.JSONEncoder):
@@ -234,13 +236,13 @@ class RestResponse(object):
         """The response body data as an dict"""
         try:
             return json.loads(self.read)
-        except ValueError as exp:
+        except (ValueError, TypeError) as exp:
             if (
                 self.path != "/smbios"
                 and self.path != "/cgi-bin/uploadFile"
                 and "/redfish/v1/Systems/1/Storage/" not in self.path
             ):
-                sys.stderr.write("An invalid response body was returned: %s" % exp)
+                LOGGER.warning("An invalid response body was returned for %s: %s", self.path, exp)
             return None
 
     @property

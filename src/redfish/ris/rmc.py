@@ -340,7 +340,8 @@ class RmcApp(object):
         for session in sessionlocs:
             try:
                 self.delete_handler(session[0], silent=True, service=True)
-            except:
+            except Exception as err:
+                LOGGER.debug(err)
                 pass
         self.redfishinst = None
 
@@ -348,7 +349,8 @@ class RmcApp(object):
         if cachedir:
             try:
                 shutil.rmtree(cachedir)
-            except Exception:
+            except Exception as err:
+                LOGGER.debug(err)
                 pass
 
     def select(self, selector=None, fltrvals=(None, None), path_refresh=False):
@@ -478,7 +480,16 @@ class RmcApp(object):
                     raise NothingSelectedError()
 
         for instance in instances:
-            currdict = instance.dict
+            if hasattr(instance, "dict"):
+                currdict = instance.dict
+            else:
+                LOGGER.debug(
+                    f"No response found for path "
+                    f"{getattr(instance, 'defpath', 'NA')},"
+                    f" please check the URI."
+                )
+                continue
+
             for patch in instance.patches:
                 currdict = jsonpatch.apply_patch(currdict, patch)
             _ = self.removereadonlyprops(currdict, emptyraise=True) if remread else None
@@ -502,7 +513,7 @@ class RmcApp(object):
             _ = [nocontent.add(prop) for prop in props if not noprop[prop]]
         return results
 
-    def info(self, selector=None, props=None, dumpjson=True, latestschema=False):
+    def info(self, selector=None, props=None, dumpjson=True):
         """Gets schema information for properties from a specified selector. If no selector is
         specified, uses the selector property in the app class. If no properties are specified
         the entire schema dictionary is returned in a list.
@@ -513,9 +524,6 @@ class RmcApp(object):
         :type props: str or list
         :param dumpjson: Flag to determine if output should be human readable or json schema.
         :type dumpjson: bool
-        :param latestschema: Flag to determine if we should drop the schema version when we try to
-                             match schema information. If True, the version will be dropped.
-        :type latestschema: bool
         :returns: A list of property schema information if dumpjson is True or string if dumpjson is
                   False.
         :rtype: list or string
@@ -541,7 +549,7 @@ class RmcApp(object):
             proppath = inst.resp.getheader("Link").split(";")[0].strip("<>") if inst.resp.getheader("Link") else None
             seldict = {}
             if not props:
-                model, bsmodel = self.get_model(currdict, attributeregistry, latestschema, proppath=proppath)
+                model, bsmodel = self.get_model(currdict, attributeregistry, proppath=proppath)
                 results = model
                 break
             if isinstance(props, six.string_types):
@@ -556,7 +564,6 @@ class RmcApp(object):
                 model, bsmodel = self.get_model(
                     currdict,
                     attributeregistry,
-                    latestschema,
                     newarg=props[:-1],
                     proppath=proppath,
                 )
@@ -585,7 +592,6 @@ class RmcApp(object):
         seldict=None,
         fltrvals=(None, None),
         diffonly=False,
-        latestschema=False,
         uniqueoverride=False,
         selector=None,
     ):
@@ -604,9 +610,6 @@ class RmcApp(object):
                          limiting the returned instances to the one you want. If no filter is
                          supplied the patch dictionary will be applied to all instances.
         :type fltrvals: tuple
-        :param latestschema: Flag to determine if we should drop the schema version when we try to
-                             match schema information. If True, the version will be dropped.
-        :type latestschema: bool
         :param diffonly: flag to differentiate only existing properties.
         :type diffonly: bool
         :param uniqueoverride: Flag to determine if system unique properties should also be patched.
@@ -656,7 +659,6 @@ class RmcApp(object):
                         newdict=diff_resp,
                         oridict=currdict,
                         unique=uniqueoverride,
-                        latestschema=latestschema,
                         proppath=proppath,
                     )
                 except SchemaValidationError:
@@ -1145,7 +1147,8 @@ class RmcApp(object):
             if oridict.get("Attributes", None):
                 currdict["Attributes"] = oridict["Attributes"]
             return currdict
-        except:
+        except Exception as err:
+            LOGGER.debug(err)
             if emptyraise is True:
                 raise EmptyRaiseForEAFP()
             elif emptyraise == "pass":
@@ -1241,7 +1244,8 @@ class RmcApp(object):
             iloversionlist = results.replace("v", "").replace(".", "").split(" ")
             try:
                 iloversion = float(".".join(iloversionlist[1:3]))
-            except:
+            except Exception as err:
+                LOGGER.debug(err)
                 iloversion = float(iloversionlist[0])
 
             model = self.getprops("Manager.", ["Model"])
@@ -1356,15 +1360,17 @@ class RmcApp(object):
                 )
             )
         except Exception as excp:
+            LOGGER.debug(excp)
             try:
                 if excp.errno == 10053:
                     raise SessionExpired()
-            except:
+            except Exception as err:
+                LOGGER.debug(err)
                 raise excp
             else:
                 raise excp
 
-    def get_model(self, currdict, attributeregistry, latestschema=None, newarg=None, proppath=None):
+    def get_model(self, currdict, attributeregistry, newarg=None, proppath=None):
         """Returns a model and possibly a bios model for the current instance's schema/registry.
         This model can be used to read schema data and validate patches.
 
@@ -1373,9 +1379,6 @@ class RmcApp(object):
         :param attributeregistry: The current systems attribute registry. If not gathering a bios
                                   registry this can be set to None.
         :type attributeregistry: dict
-        :param latestschema: Flag to determine if we should drop the schema version when we try to
-                             match schema information. If True, the version will be dropped.
-        :type latestschema: bool
         :param newargs: List of multi level properties to be gathered.
         :type newargs: list
         :param proppath: The path of the schema you want to validate (from Location header).
@@ -1388,7 +1391,6 @@ class RmcApp(object):
         model = valobj.get_registry_model(
             currtype=currdict[type_str],
             newarg=newarg,
-            latestschema=latestschema,
             proppath=proppath,
         )
         if not attributeregistry and model:
@@ -1401,7 +1403,6 @@ class RmcApp(object):
         bsmodel = valobj.get_registry_model(
             currtype=attrval if attrval else currdict[type_str],
             newarg=newarg,
-            latestschema=latestschema,
             searchtype=self.typepath.defs.attributeregtype,
         )
         return model, bsmodel
@@ -1548,7 +1549,6 @@ class RmcApp(object):
         self,
         instance=None,
         attributeregistry=None,
-        latestschema=None,
         proppath=None,
         newdict=None,
         oridict=None,
@@ -1578,7 +1578,6 @@ class RmcApp(object):
             monolith=entrymono,
             unique=unique,
             searchtype=self.typepath.defs.attributeregtype if attributeregistry else None,
-            latestschema=latestschema,
             proppath=proppath,
         )
 

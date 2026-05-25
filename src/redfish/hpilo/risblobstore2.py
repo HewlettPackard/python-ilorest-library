@@ -175,6 +175,7 @@ class BlobStore2(object):
         lib = self.gethprestchifhandle()
         self.log_dir = log_dir
 
+        self.channel = None  # guard __del__ in case HpIlo() raises below
         self.channel = HpIlo(dll=lib, log_dir=log_dir)
 
         # Set credentials after channel creation so HpIlo's internal ChifInitialize
@@ -187,11 +188,24 @@ class BlobStore2(object):
             lib.initiate_credentials(usernew, passnew)
             LOGGER.debug("Credentials set after BlobStore2 channel creation")
 
-        self.max_retries = 44
-        self.max_read_retries = 3
-        self.delay = 0.25
+        self.unloadchifhandle(lib)
 
-        LOGGER.info("BlobStore initialized with log directory: %s", log_dir)
+        # Retry calibration for sustained 0.5 Hz login (watch -n 2).
+        #
+        # With resource leaks fixed (cert_login and _send_receive_raw now
+        # release CHIF handles), concurrent sessions stay at ~3-5 instead
+        # of accumulating unboundedly.  This means iLO's 16 CHIF slots are
+        # no longer starved, and BADPARAMETER bursts are shorter.
+        #
+        self.max_retries = 15
+        self.max_read_retries = 10
+        self.delay = 0.25
+        self.delay_step = 0.10
+        self.max_jitter = 1.5
+        self.max_delay = 1.5
+        self.read_retry_delay = 0.10
+
+        LOGGER.debug("BlobStore initialized with log directory: %s", log_dir)
 
     def __del__(self):
         """Blob store 2 close channel function"""
@@ -210,7 +224,7 @@ class BlobStore2(object):
         :rtype: bytearray
         :raises HpIloError: If the operation fails.
         """
-        LOGGER.info("Attempting to create blob: Key=%s, Namespace=%s", key, namespace)
+        LOGGER.debug("Attempting to create blob: Key=%s, Namespace=%s", key, namespace)
 
         lib = None
         try:
@@ -228,7 +242,7 @@ class BlobStore2(object):
             data = ptr[: lib.size_of_createRequest()]
             data = bytearray(data)
 
-            LOGGER.info("Sending blob creation request")
+            LOGGER.debug("Sending blob creation request")
             resp = self._send_receive_raw(data)
 
             errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
@@ -236,12 +250,9 @@ class BlobStore2(object):
                 LOGGER.error("Blob creation failed. Error Code: %d", errorcode)
                 raise HpIloError(errorcode)
 
-            LOGGER.info("Blob creation successful for Key=%s, Namespace=%s", key, namespace)
+            LOGGER.debug("Blob creation successful for Key=%s, Namespace=%s", key, namespace)
             return resp
 
-        except Exception as e:
-            LOGGER.exception("Exception during blob creation: %s", str(e))
-            raise
 
         finally:
             LOGGER.debug("Unloading library handle")
@@ -257,59 +268,68 @@ class BlobStore2(object):
         :type namespace: str.
 
         """
-        LOGGER.info(f"get_info called with key='{key}', namespace='{namespace}', retries={retries}")
+        LOGGER.debug(f"get_info called with key='{key}', namespace='{namespace}', retries={retries}")
 
         lib = self.gethprestchifhandle()
         lib.get_info.argtypes = [c_char_p, c_char_p]
         lib.get_info.restype = POINTER(c_ubyte)
 
-        name = create_string_buffer(key.encode("utf-8"))
-        namspace = create_string_buffer(namespace.encode("utf-8"))
-
-        ptr = lib.get_info(name, namspace)
-        data = ptr[: lib.size_of_infoRequest()]
-        data = bytearray(data)
         delay = self.delay
         resp = None
-        while retries <= self.max_retries:
-            LOGGER.debug(f"Attempt {retries+1}/{self.max_retries} - Sending request to iLO.")
+        try:
+            while retries <= self.max_retries:
+                LOGGER.debug(f"Attempt {retries+1}/{self.max_retries} - Sending request to iLO.")
 
-            resp = self._send_receive_raw(data)
-            errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
-            header = resp[:8].hex()
+                # Build a fresh request packet on every attempt so that
+                # channel reinitialisation inside _send_receive_raw does
+                # not leave us with a stale packet from the old session.
+                name = create_string_buffer(key.encode("utf-8"))
+                namspace = create_string_buffer(namespace.encode("utf-8"))
+                ptr = lib.get_info(name, namspace)
+                data = bytearray(ptr[: lib.size_of_infoRequest()])
 
-            LOGGER.debug(f"Response received - Error Code: {errorcode}, Headers: {header}, Size: {len(resp)} bytes")
+                resp = self._send_receive_raw(data)
+                errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
+                header = resp[:8].hex()
 
-            if errorcode == BlobReturnCodes.BADPARAMETER:
-                if retries < self.max_retries:
-                    LOGGER.warning(
-                        f"BADPARAMETER error received. Retrying in {delay} seconds... "
-                        f"({retries+1}/{self.max_retries})"
-                    )
-                    time.sleep(delay)
-                    retries += 1
-                    delay += 0.05
-                    continue
+                LOGGER.debug(f"Response received - Error Code: {errorcode}, Headers: {header}, Size: {len(resp)} bytes")
+
+                if errorcode == BlobReturnCodes.BADPARAMETER:
+                    if retries < self.max_retries:
+                        jitter = random.uniform(0, self.max_jitter)
+                        sleep_duration = delay + jitter
+                        LOGGER.warning(
+                            f"BADPARAMETER error received. Retrying in {sleep_duration:.4f} seconds "
+                            f"(base={delay:.4f}, jitter={jitter:.4f})... "
+                            f"({retries+1}/{self.max_retries})"
+                        )
+                        time.sleep(sleep_duration)
+                        retries += 1
+                        delay += self.delay_step
+                        delay = min(delay, self.max_delay)
+                        continue
+                    else:
+                        # Recoverable error
+                        LOGGER.warning(f"Max retries ({self.max_retries}) exceeded. Raising Blob2OverrideError.")
+                        raise Blob2OverrideError(errorcode)
+
+                elif errorcode == BlobReturnCodes.NOTFOUND:
+                    LOGGER.error(f"BlobNotFoundError: key='{key}', namespace='{namespace}'")
+                    raise BlobNotFoundError(key, namespace)
+
+                elif errorcode not in (BlobReturnCodes.SUCCESS, BlobReturnCodes.NOTMODIFIED):
+                    LOGGER.error(f"HpIloError: Unexpected error code {errorcode}.")
+                    raise HpIloError(errorcode)
+
                 else:
-                    LOGGER.error(f"Max retries ({self.max_retries}) exceeded. Raising Blob2OverrideError.")
-                    raise Blob2OverrideError(errorcode)
+                    LOGGER.debug("Request successful. Extracting response data.")
+                    break
 
-            elif errorcode == BlobReturnCodes.NOTFOUND:
-                LOGGER.error(f"BlobNotFoundError: key='{key}', namespace='{namespace}'")
-                raise BlobNotFoundError(key, namespace)
+            response = resp[lib.size_of_responseHeaderBlob() :]
+        finally:
+            self.unloadchifhandle(lib)
 
-            elif errorcode not in (BlobReturnCodes.SUCCESS, BlobReturnCodes.NOTMODIFIED):
-                LOGGER.error(f"HpIloError: Unexpected error code {errorcode}.")
-                raise HpIloError(errorcode)
-
-            else:
-                LOGGER.info("Request successful. Extracting response data.")
-                break
-
-        response = resp[lib.size_of_responseHeaderBlob() :]
-        self.unloadchifhandle(lib)
-
-        LOGGER.info(f"get_info completed successfully for key='{key}', namespace='{namespace}'.")
+        LOGGER.debug(f"get_info completed successfully for key='{key}', namespace='{namespace}'.")
         return response
 
     def read(self, key, namespace, retries=0):
@@ -321,7 +341,7 @@ class BlobStore2(object):
         :type namespace: str.
 
         """
-        LOGGER.info("Starting blob read: Key=%s, Namespace=%s, Retry=%d", key, namespace, retries)
+        LOGGER.debug("Starting blob read: Key=%s, Namespace=%s, Retry=%d", key, namespace, retries)
 
         try:
             lib = self.gethprestchifhandle()
@@ -335,7 +355,7 @@ class BlobStore2(object):
             LOGGER.debug("Fetching blob info to determine size.")
             blob_info = self.get_info(key, namespace)
             blobsize = struct.unpack("<I", bytes(blob_info[0:4]))[0]
-            LOGGER.info("Blob size determined: %d bytes", blobsize)
+            LOGGER.debug("Blob size determined: %d bytes", blobsize)
 
             bytes_read = 0
             data = bytearray()
@@ -353,23 +373,32 @@ class BlobStore2(object):
                 if bytesread == 0:
                     LOGGER.debug(f"Zero bytes read in fragment. Fragment metadata: offset={bytes_read}, count={count}")
                     if retries < self.max_read_retries:
-                        LOGGER.warning(
+                        LOGGER.debug(
                             "Read attempt failed. Retrying (Attempt %d/%d).", retries + 1, self.max_read_retries
                         )
+                        time.sleep(self.read_retry_delay)
                         return self.read(key=key, namespace=namespace, retries=retries + 1)
                     else:
-                        LOGGER.error("Maximum read retries (%d) exceeded.", self.max_read_retries)
+                        LOGGER.debug("Maximum read retries (%d) exceeded.", self.max_read_retries)
                         raise BlobRetriesExhaustedError()
 
                 data.extend(recvpkt[newreadsize : newreadsize + bytesread])
                 bytes_read += bytesread
                 LOGGER.debug("Total bytes read so far: %d/%d", bytes_read, blobsize)
 
-            LOGGER.info("Blob read successfully: Key=%s, Namespace=%s, Total Bytes=%d", key, namespace, len(data))
+            LOGGER.debug("Blob read successfully: Key=%s, Namespace=%s, Total Bytes=%d", key, namespace, len(data))
             return data
 
+        except BlobRetriesExhaustedError:
+            raise
+        except Blob2OverrideError:
+            raise
+        except BlobNotFoundError:
+            raise
+        except HpIloError:
+            raise
         except Exception as e:
-            LOGGER.exception("Error during blob read: %s", str(e))
+            LOGGER.warning("Unexpected error during blob read: %s", str(e))
             raise
 
     def read_fragment(self, key, namespace, offset=0, count=1):
@@ -385,10 +414,11 @@ class BlobStore2(object):
         :type namespace: int.
 
         """
-        LOGGER.info(
+        LOGGER.debug(
             "Starting fragmented blob read: Key=%s, Namespace=%s, Offset=%d, Count=%d", key, namespace, offset, count
         )
 
+        lib = None
         try:
             lib = self.gethprestchifhandle()
             lib.read_fragment.argtypes = [c_uint, c_uint, c_char_p, c_char_p]
@@ -406,7 +436,7 @@ class BlobStore2(object):
             LOGGER.debug("Extracting request data (Size=%d)", request_size)
             data = bytearray(ptr[:request_size])
 
-            LOGGER.info("Sending fragmented read request to iLO.")
+            LOGGER.debug("Sending fragmented read request to iLO.")
             resp = self._send_receive_raw(data)
 
             # Check response error code
@@ -418,12 +448,12 @@ class BlobStore2(object):
                 LOGGER.warning("Received response smaller than expected. Padding response.")
                 resp = resp + b"\0" * (response_size - len(resp))
 
-            LOGGER.info("Fragmented blob read successful: Key=%s, Bytes Received=%d", key, len(resp))
+            LOGGER.debug("Fragmented blob read successful: Key=%s, Bytes Received=%d", key, len(resp))
             return resp
 
-        except Exception as e:
-            LOGGER.exception("Error occurred during read_fragment: %s", str(e))
-            raise
+        finally:
+            if lib is not None:
+                self.unloadchifhandle(lib)
 
     def write(self, key, namespace, data=None):
         """Write a particular blob
@@ -436,7 +466,7 @@ class BlobStore2(object):
         :type data: str.
 
         """
-        LOGGER.info(f"Starting to write blob with key: {key} in namespace: {namespace}")
+        LOGGER.debug(f"Starting to write blob with key: {key} in namespace: {namespace}")
 
         lib = self.gethprestchifhandle()
         maxwrite = lib.max_write_size()
@@ -449,7 +479,7 @@ class BlobStore2(object):
         if data:
             data_length = len(data)
             bytes_written = 0
-            LOGGER.info(f"Data length: {data_length}")
+            LOGGER.debug(f"Data length: {data_length}")
 
             while bytes_written < data_length:
                 if (maxwrite - writesize) < (data_length - bytes_written):
@@ -477,7 +507,7 @@ class BlobStore2(object):
 
         try:
             result = self.finalize(key, namespace=namespace)
-            LOGGER.info(f"Finalization successful for key: {key} in namespace: {namespace}")
+            LOGGER.debug(f"Finalization successful for key: {key} in namespace: {namespace}")
             return result
         except Exception as e:
             LOGGER.error(f"Failed to finalize the write for blob with key {key} in namespace {namespace}: {e}")
@@ -498,7 +528,7 @@ class BlobStore2(object):
         :type count: int.
 
         """
-        LOGGER.info(f"Starting fragmented write for blob with key: {key} in namespace: {namespace}")
+        LOGGER.debug(f"Starting fragmented write for blob with key: {key} in namespace: {namespace}")
         LOGGER.debug(f"Fragment write params: offset={offset}, count={count}")
 
         lib = self.gethprestchifhandle()
@@ -510,13 +540,11 @@ class BlobStore2(object):
 
         # Call the external library function
         try:
-            LOGGER.debug(f"Write fragment request: key={key}, namespace={namespace}, offset={offset}, count={count}")
             ptr = lib.write_fragment(offset, count, name, namespace)
         except Exception as e:
             LOGGER.error(f"Error while calling write_fragment for key: {key} in namespace: {namespace}: {e}")
             raise
 
-        LOGGER.debug(f"Preparing write fragment data: request_size={count} bytes")
 
         sendpacket = ptr[: lib.size_of_writeRequest()]
 
@@ -525,22 +553,23 @@ class BlobStore2(object):
 
         dataarr = bytearray(sendpacket)
         dataarr.extend(memoryview(data))
-        LOGGER.debug(f"Request metadata: offset={offset}, size={count}")
 
         # Send the data
         try:
             resp = self._send_receive_raw(dataarr)
         except Exception as e:
             LOGGER.error(f"Error during sending/receiving raw data for blob with key: {key}: {e}")
+            self.unloadchifhandle(lib)
             raise
 
         # Check for errors in response
         errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
         if not (errorcode == BlobReturnCodes.SUCCESS or errorcode == BlobReturnCodes.NOTMODIFIED):
             LOGGER.error(f"Write fragment failed for key: {key} in namespace: {namespace}. Error code: {errorcode}")
+            self.unloadchifhandle(lib)
             raise HpIloError(errorcode)
 
-        LOGGER.info(f"Fragmented write successful for key: {key} in namespace: {namespace}")
+        LOGGER.debug(f"Fragmented write successful for key: {key} in namespace: {namespace}")
 
         self.unloadchifhandle(lib)
 
@@ -556,52 +585,56 @@ class BlobStore2(object):
         :param retries: The number of retries if deletion fails (default 0).
         :type retries: int
         """
-        LOGGER.info(f"Starting blob deletion: key={key}, namespace={namespace}, retries={retries}")
+        LOGGER.debug(f"Starting blob deletion: key={key}, namespace={namespace}, retries={retries}")
 
         lib = self.gethprestchifhandle()
         lib.delete_blob.argtypes = [c_char_p, c_char_p]
         lib.delete_blob.restype = POINTER(c_ubyte)
 
-        name = create_string_buffer(key.encode("utf-8"))
-        namspace = create_string_buffer(namespace.encode("utf-8"))
-
-        ptr = lib.delete_blob(name, namspace)
-        data = ptr[: lib.size_of_deleteRequest()]
-        data = bytearray(data)
         delay = self.delay
         errorcode = None
-        while retries <= self.max_retries:
-            LOGGER.debug(f"Attempt {retries + 1} of {self.max_retries}: Sending raw delete request.")
+        try:
+            while retries <= self.max_retries:
+                LOGGER.debug(f"Attempt {retries + 1} of {self.max_retries}: Sending raw delete request.")
 
-            resp = self._send_receive_raw(data)
+                # Build a fresh request packet on every attempt so that
+                # channel reinitialisation inside _send_receive_raw does
+                # not leave us with a stale packet from the old session.
+                name = create_string_buffer(key.encode("utf-8"))
+                namspace = create_string_buffer(namespace.encode("utf-8"))
+                ptr = lib.delete_blob(name, namspace)
+                data = bytearray(ptr[: lib.size_of_deleteRequest()])
 
-            # Checking for errors in the received response
-            errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
-            LOGGER.debug(f"Received error code: {errorcode}")
+                resp = self._send_receive_raw(data)
 
-            if errorcode == BlobReturnCodes.BADPARAMETER:
-                LOGGER.warning(
-                    f"BADPARAMETER error received (retries left: {self.max_retries - retries}). "
-                    f"Retrying after {delay} seconds."
-                )
-                if retries < self.max_retries:
-                    time.sleep(delay)
-                    retries += 1
-                    delay += 0.05
-                    continue
+                # Checking for errors in the received response
+                errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
+                LOGGER.debug(f"Received error code: {errorcode}")
+
+                if errorcode == BlobReturnCodes.BADPARAMETER:
+                    if retries < self.max_retries:
+                        jitter = random.uniform(0, self.max_jitter)
+                        sleep_duration = delay + jitter
+                        LOGGER.warning(
+                            f"Retrying after {sleep_duration:.4f} seconds "
+                            f"(base={delay:.4f}, jitter={jitter:.4f})."
+                        )
+                        time.sleep(sleep_duration)
+                        retries += 1
+                        delay += self.delay_step
+                        delay = min(delay, self.max_delay)
+                        continue
+                    else:
+                        # Recoverable error
+                        LOGGER.warning(f"Max retries reached. Unable to delete blob key={key}. Raising Blob2OverrideError.")
+                        raise Blob2OverrideError(errorcode)
+                elif errorcode not in (BlobReturnCodes.SUCCESS, BlobReturnCodes.NOTMODIFIED):
+                    raise HpIloError(errorcode)
                 else:
-                    LOGGER.warning(f"Max retries reached. Unable to delete blob key={key}. Raising Blob2OverrideError.")
-                    raise Blob2OverrideError(errorcode)
-            elif errorcode not in (BlobReturnCodes.SUCCESS, BlobReturnCodes.NOTMODIFIED):
-                LOGGER.debug(f"Error during blob deletion: {errorcode}. Raising HpIloError.")
-                raise HpIloError(errorcode)
-            else:
-                LOGGER.info(f"Blob deletion successful for key={key} in namespace={namespace}.")
-                break
+                    break
+        finally:
+            self.unloadchifhandle(lib)
 
-        self.unloadchifhandle(lib)
-
-        LOGGER.info(f"Exiting delete function for key={key}. Final error code: {errorcode}")
         return errorcode
 
     def list(self, namespace):
@@ -610,7 +643,7 @@ class BlobStore2(object):
         :param namespace: The blob namespace to retrieve the keys from.
         :type namespace: str.
         """
-        LOGGER.info(f"Starting blob listing operation for namespace: {namespace}")
+        LOGGER.debug(f"Starting blob listing operation for namespace: {namespace}")
 
         lib = self.gethprestchifhandle()
         lib.list_blob.argtypes = [c_char_p]
@@ -623,24 +656,24 @@ class BlobStore2(object):
         data = ptr[: lib.size_of_listRequest()]
         data = bytearray(data)
 
-        # Send and receive raw data
-        resp = self._send_receive_raw(data)
+        try:
+            # Send and receive raw data
+            resp = self._send_receive_raw(data)
 
-        # Check for errors in the response
-        errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
-        LOGGER.debug(f"Received error code: {errorcode}")
+            # Check for errors in the response
+            errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
+            LOGGER.debug(f"Received error code: {errorcode}")
 
-        if not (errorcode == BlobReturnCodes.SUCCESS or errorcode == BlobReturnCodes.NOTMODIFIED):
-            LOGGER.error(f"Error during blob listing: {errorcode}. Raising HpIloError.")
-            raise HpIloError(errorcode)
+            if not (errorcode == BlobReturnCodes.SUCCESS or errorcode == BlobReturnCodes.NOTMODIFIED):
+                LOGGER.error(f"Error during blob listing: {errorcode}. Raising HpIloError.")
+                raise HpIloError(errorcode)
 
-        # Padding response to match expected size
-        resp = resp + b"\0" * (lib.size_of_listResponse() - len(resp))
+            # Padding response to match expected size
+            resp = resp + b"\0" * (lib.size_of_listResponse() - len(resp))
+        finally:
+            self.unloadchifhandle(lib)
 
-        # Unload the handler
-        self.unloadchifhandle(lib)
-
-        LOGGER.info(f"Blob listing successful for namespace: {namespace}")
+        LOGGER.debug(f"Blob listing successful for namespace: {namespace}")
         return resp
 
     def finalize(self, key, namespace):
@@ -651,7 +684,7 @@ class BlobStore2(object):
         :param namespace: The blob namespace to finalize the key in.
         :type namespace: str.
         """
-        LOGGER.info(f"Starting blob finalize operation for key: {key}, namespace: {namespace}")
+        LOGGER.debug(f"Starting blob finalize operation for key: {key}, namespace: {namespace}")
 
         # Getting the handler library
         lib = self.gethprestchifhandle()
@@ -668,21 +701,21 @@ class BlobStore2(object):
         data = ptr[: lib.size_of_finalizeRequest()]
         data = bytearray(data)
 
-        # Send and receive raw data
-        resp = self._send_receive_raw(data)
+        try:
+            # Send and receive raw data
+            resp = self._send_receive_raw(data)
 
-        # Checking for errors in the response
-        errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
-        LOGGER.debug(f"Received error code: {errorcode}")
+            # Checking for errors in the response
+            errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
+            LOGGER.debug(f"Received error code: {errorcode}")
 
-        if not (errorcode == BlobReturnCodes.SUCCESS or errorcode == BlobReturnCodes.NOTMODIFIED):
-            LOGGER.error(f"Error during blob finalize: {errorcode}. Raising HpIloError.")
-            raise HpIloError(errorcode)
+            if not (errorcode == BlobReturnCodes.SUCCESS or errorcode == BlobReturnCodes.NOTMODIFIED):
+                LOGGER.error(f"Error during blob finalize: {errorcode}. Raising HpIloError.")
+                raise HpIloError(errorcode)
+        finally:
+            self.unloadchifhandle(lib)
 
-        # Unload the handler
-        self.unloadchifhandle(lib)
-
-        LOGGER.info(f"Blob finalize successful for key: {key}, namespace: {namespace}")
+        LOGGER.debug(f"Blob finalize successful for key: {key}, namespace: {namespace}")
         return errorcode
 
     def rest_immediate(
@@ -793,9 +826,8 @@ class BlobStore2(object):
             try:
                 self.delete(rsp_key, rsp_namespace)
                 LOGGER.debug("Successfully deleted blob with key: %s", rsp_key)
-            except Exception as excp:
-                LOGGER.warning("Error deleting blob: %s", excp)
-                raise excp
+            except Exception:
+                raise
         else:
             try:
                 self.delete(rsp_key, rsp_namespace)
@@ -806,7 +838,7 @@ class BlobStore2(object):
                 LOGGER.warning("Packet exchange error during delete operation.")
             except Exception as excp:
                 LOGGER.warning("Error deleting blob: %s", excp)
-                raise excp
+                raise
 
         return tmpresponse
 
@@ -844,14 +876,11 @@ class BlobStore2(object):
                 securitystate = int(resp[72])
                 LOGGER.debug("Failed to extract character. Security state interpreted as integer: %d", securitystate)
 
-            self.unloadchifhandle(lib)
-
             LOGGER.debug("Returning security state: %s", securitystate)
             return securitystate
 
-        except Exception as e:
-            LOGGER.error("Error while fetching security state: %s", str(e))
-            raise
+        finally:
+            self.unloadchifhandle(lib)
 
     def mount_blackbox(self):
         """Operation to mount the blackbox partition"""
@@ -1060,14 +1089,11 @@ class BlobStore2(object):
         :type indata: str.
 
         """
-        LOGGER.info("Starting _send_receive_raw operation.")
         excp = None
 
         for attempt in range(1, 4):  # 3 attempts
             try:
-                LOGGER.debug(f"Attempt {attempt}: Sending data to iLO. Data size: {len(indata)} bytes")
                 resp = self.channel.send_receive_raw(indata, 10)
-
                 # Log response details
                 errorcode = None
                 if len(resp) >= 12:
@@ -1076,33 +1102,31 @@ class BlobStore2(object):
                         f"Response details - Size: {len(resp)} bytes, Error Code: {errorcode}, "
                         f"Headers: {resp[:8].hex()}"
                     )
-                LOGGER.info("Data successfully sent and received on attempt %d.", attempt)
                 return resp
             except Exception as exp:
-                LOGGER.warning("Attempt %d failed. Error: %s", attempt, str(exp))
                 self.channel.close()
-                LOGGER.info("Reinitializing communication channel with iLO.")
+                LOGGER.warning(
+                    "Attempt %d/3 failed (%s). Reinitializing CHIF channel.",
+                    attempt, exp,
+                )
                 lib = self.gethprestchifhandle()
-
                 self.channel = HpIlo(dll=lib, log_dir=self.log_dir)
+                self.unloadchifhandle(lib)
+                excp = exp
 
-                # Note: Credentials cannot be restored here after channel reinit.
-                # If high-security mode requires credentials, the operation may fail.
-                # Consider passing credentials explicitly to BlobStore2 constructor.
-
-                excp = exp  # Store last exception for final raise
-
-        LOGGER.error("All attempts to send/receive raw data have failed.")
         if excp:
-            raise excp  # Raise only after all retries fail
+            raise excp
 
     def cert_login(self, cert_file, priv_key, key_pass):
         lib = self.gethprestchifhandle()
-        lib.login_cert.argtypes = [c_void_p, c_char_p, c_char_p, c_char_p]
-        lib.login_cert.restype = c_char_p
+        try:
+            lib.login_cert.argtypes = [c_void_p, c_char_p, c_char_p, c_char_p]
+            lib.login_cert.restype = c_char_p
 
-        token = lib.login_cert(self.channel.fhandle, cert_file, priv_key, key_pass)
-        return token
+            token = lib.login_cert(self.channel.fhandle, cert_file, priv_key, key_pass)
+            return token
+        finally:
+            self.unloadchifhandle(lib)
 
     @staticmethod
     def gethprestchifhandle():
@@ -1218,7 +1242,7 @@ class BlobStore2(object):
         :raises HpIloInitialError: If credential verification fails.
         """
 
-        LOGGER.info("Initializing Chif credentials with security settings.")
+        LOGGER.debug("Initializing Chif credentials with security settings.")
         LOGGER.debug("Username provided: %s, Log directory: %s", username, log_dir)
 
         dll = None
@@ -1228,8 +1252,8 @@ class BlobStore2(object):
             # Enable debug output if LOGGER level is DEBUG
             if LOGGER.isEnabledFor(logging.DEBUG) and log_dir:
                 # Rotate rest.debug.log if it exceeds size threshold
-                RestDebugLogRotator.rotate_rest_debug_log(log_dir, max_size_mb=2.0, max_backups=3)
-    
+                RestDebugLogRotator.rotate_rest_debug_log(log_dir, max_size_mb=2, max_backups=3)
+
                 logdir_c = create_string_buffer(log_dir.encode("utf-8"))
                 LOGGER.debug("Enabling debug output to directory: %s", log_dir)
                 dll.enabledebugoutput(logdir_c)
@@ -1273,22 +1297,19 @@ class BlobStore2(object):
                         LOGGER.error("Error %s occurred while trying to open a channel to iLO.", credreturn)
                         raise HpIloInitialError(f"Error {credreturn} occurred while trying to open a channel to iLO.")
                 else:
-                    LOGGER.info("Security not required. Disabling security.")
+                    LOGGER.debug("Security not required. Disabling security.")
                     dll.ChifDisableSecurity()
             else:
                 LOGGER.debug("No username provided. Checking security requirement.")
                 if dll.ChifIsSecurityRequired() > 0:
-                    LOGGER.warning("High security mode detected but no credentials provided.")
+                    LOGGER.debug("High security mode detected but no credentials provided.")
                     return False
                 else:
-                    LOGGER.info("Security not required. Disabling security.")
+                    LOGGER.debug("Security not required. Disabling security.")
                     dll.ChifDisableSecurity()
 
             return True
 
-        except Exception as e:
-            LOGGER.exception("Exception occurred during Chif initialization: %s", str(e))
-            raise
 
         finally:
             LOGGER.debug("Unloading Chif handle.")
@@ -1322,21 +1343,18 @@ class BlobStore2(object):
         :type lib: library handle
         """
         if lib is None:
-            LOGGER.warning("unloadchifhandle called with None library handle. Nothing to release.")
+            LOGGER.debug("unloadchifhandle called with None library handle. Nothing to release.")
             return
 
         try:
             libhandle = lib._handle
-            LOGGER.info("Releasing Chif library handle: %s", libhandle)
+            LOGGER.debug("Releasing Chif library handle: %s", libhandle)
 
             if os.name == "nt":
-                LOGGER.debug("Using Windows FreeLibrary to release handle.")
                 windll.kernel32.FreeLibrary(None, handle=libhandle)
             else:
-                LOGGER.debug("Using dlclose to release handle on Linux/Unix.")
                 dlclose(libhandle)
 
-            LOGGER.info("Successfully released Chif library handle.")
 
-        except Exception as e:
-            LOGGER.exception("Error while unloading Chif library handle: %s", str(e))
+        except Exception:
+            pass
