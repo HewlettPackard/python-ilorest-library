@@ -175,7 +175,14 @@ class BlobStore2(object):
         lib = self.gethprestchifhandle()
         self.log_dir = log_dir
 
-        self.channel = None  # guard __del__ in case HpIlo() raises below
+        # Store credentials as private attributes for channel reconnect scenarios.
+        # _send_receive_raw needs these to restore authentication after a channel
+        # failure and reconnect.
+        self._username = username
+        # Store the password in a mutable bytearray (not an immutable str) so it can be
+        # explicitly zeroed in __del__. A Python str cannot be wiped, leaving the plaintext
+        # secret lingering in the interpreter's memory until garbage collection.
+        self._password = bytearray(password.encode("utf-8")) if password else None
         self.channel = HpIlo(dll=lib, log_dir=log_dir)
 
         # Set credentials after channel creation so HpIlo's internal ChifInitialize
@@ -211,6 +218,14 @@ class BlobStore2(object):
         """Blob store 2 close channel function"""
         if hasattr(self, "channel"):
             self.channel.close()
+
+        # Zero the retained password buffer so the plaintext secret does not linger
+        # in memory after the store is destroyed.
+        password = getattr(self, "_password", None)
+        if isinstance(password, bytearray):
+            for index in range(len(password)):
+                password[index] = 0
+            self._password = None
 
     def create(self, key, namespace):
         """
@@ -1111,8 +1126,27 @@ class BlobStore2(object):
                 )
                 lib = self.gethprestchifhandle()
                 self.channel = HpIlo(dll=lib, log_dir=self.log_dir)
+
+                # Restore credentials after channel reinit so that high-security
+                # mode operations continue to work after a transient failure.
+                #
+                # NOTE: This MUST happen before unloadchifhandle(lib) below.
+                # unloadchifhandle() calls FreeLibrary()/dlclose() on lib, so
+                # invoking lib.initiate_credentials() afterwards is a use-after-unload
+                # (undefined behaviour / possible crash) and would not actually
+                # apply the credentials to the freshly created channel.
+                if self._username and self._password:
+                    lib.initiate_credentials.argtypes = [c_char_p, c_char_p]
+                    lib.initiate_credentials.restype = POINTER(c_ubyte)
+                    usernew = create_string_buffer(self._username.encode("utf-8"))
+                    passnew = create_string_buffer(bytes(self._password))
+                    lib.initiate_credentials(usernew, passnew)
+                    LOGGER.debug("Credentials restored after channel reconnect.")
+
                 self.unloadchifhandle(lib)
-                excp = exp
+                excp = exp  # Store last exception for final raise
+
+        LOGGER.error("All attempts to send/receive raw data have failed.")
 
         if excp:
             raise excp
@@ -1262,50 +1296,104 @@ class BlobStore2(object):
             LOGGER.debug("Calling ChifInitialize()")
             dll.ChifInitialize(None)
 
+            # Check security level requirement once, used throughout the logic below
+            LOGGER.debug("Checking iLO security requirements")
+            security_level = dll.ChifIsSecurityRequired()
+            LOGGER.debug(f"Security level check returned: {security_level}")
+
+            # A negative value indicates the security query itself failed. Fail safe:
+            # do not silently treat it as "no security required" (which would disable
+            # security), since we cannot determine the iLO security state.
+            if security_level < 0:
+                LOGGER.error(
+                    "Failed to determine iLO security requirement "
+                    "(ChifIsSecurityRequired returned %s).",
+                    security_level,
+                )
+                raise HpIloInitialError(
+                    f"Failed to determine iLO security requirement: error {security_level}."
+                )
+
             # If username is provided, proceed with security authentication
             if username:
                 if not password:
                     LOGGER.warning("Password is missing while username is provided.")
                     return False  # Invalid credentials
 
-                # Check security level requirement
-                LOGGER.debug("Checking iLO security requirements")
-                security_level = dll.ChifIsSecurityRequired()
-                LOGGER.debug(f"Security level check returned: {security_level}")
                 if security_level > 0:
                     LOGGER.info("High security mode detected. Authenticating credentials.")
-                    LOGGER.debug(f"Security requirements: Username={username}, High Security Mode=True")
-
-                    dll.initiate_credentials.argtypes = [c_char_p, c_char_p]
-                    dll.initiate_credentials.restype = POINTER(c_ubyte)
-
-                    usernew = create_string_buffer(username.encode("utf-8"))
-                    passnew = create_string_buffer(password.encode("utf-8"))
-
-                    LOGGER.debug("Initiating credential verification.")
-                    dll.initiate_credentials(usernew, passnew)
-
-                    credreturn = dll.ChifVerifyCredentials()
-                    if credreturn == BlobReturnCodes.SUCCESS:
-                        LOGGER.info("Credentials verified successfully.")
-                        # Note: Credentials are NOT cached for security reasons.
-                        # Applications should pass credentials explicitly to BlobStore2 constructor.
-                    elif credreturn == hpiloreturncodes.CHIFERR_AccessDenied:
-                        LOGGER.error("Access Denied: Invalid credentials.")
-                        raise Blob2SecurityError()
-                    else:
-                        LOGGER.error("Error %s occurred while trying to open a channel to iLO.", credreturn)
-                        raise HpIloInitialError(f"Error {credreturn} occurred while trying to open a channel to iLO.")
                 else:
-                    LOGGER.debug("Security not required. Disabling security.")
+                    # Production mode (security not required): credentials were supplied for
+                    # extra safety. Validate them so that a wrong password is rejected even
+                    # though iLO would otherwise allow unauthenticated local access.
+                    #
+                    # IMPORTANT: Do NOT call ChifDisableSecurity() here. It must be
+                    # called AFTER credential verification succeeds, otherwise
+                    # ChifVerifyCredentials() may become a no-op and accept any password.
+                    LOGGER.info(
+                        "Production mode: credentials provided for extra safety. "
+                        "Validating before proceeding."
+                    )
+
+                # Validate credentials regardless of security mode when they are provided.
+                # Verification MUST happen before ChifDisableSecurity() so the CHIF library
+                # actually checks the password against iLO.
+                LOGGER.debug(f"Security requirements: Username={username}, High Security Mode={security_level > 0}")
+
+                dll.initiate_credentials.argtypes = [c_char_p, c_char_p]
+                dll.initiate_credentials.restype = POINTER(c_ubyte)
+
+                usernew = create_string_buffer(username.encode("utf-8"))
+                passnew = create_string_buffer(password.encode("utf-8"))
+
+                LOGGER.debug("Initiating credential verification.")
+                dll.initiate_credentials(usernew, passnew)
+
+                credreturn = dll.ChifVerifyCredentials()
+                if credreturn == BlobReturnCodes.SUCCESS:
+                    LOGGER.info("Credentials verified successfully.")
+                    # Now that credentials are confirmed valid, disable security in
+                    # production mode so subsequent blob operations proceed without
+                    # per-request authentication overhead.
+                    if security_level <= 0:
+                        LOGGER.debug("Disabling security after successful credential verification.")
+                        dll.ChifDisableSecurity()
+                elif credreturn == hpiloreturncodes.CHIFERR_AccessDenied:
+                    # Expected outcome for a wrong username/password. The caller
+                    # (rest/connections.py) converts this into InvalidCredentialsError,
+                    # and the front-end presents a single user-facing message. Log at
+                    # debug only to avoid emitting a duplicate error line on stdout.
+                    LOGGER.debug("Access Denied: Invalid credentials.")
+                    raise Blob2SecurityError()
+                elif security_level <= 0:
+                    # Production mode (security not required): iLO grants unauthenticated
+                    # local access and does not expose a CHIF credential-verification
+                    # path, so ChifVerifyCredentials() reports the operation as
+                    # unsupported (e.g. error 95 / EOPNOTSUPP on Linux) instead of
+                    # validating the password. This is expected on hardware and must not
+                    # abort the connection. Genuine credential rejection is still handled
+                    # by the CHIFERR_AccessDenied branch above, so we only reach here when
+                    # verification simply is not available. Fall back to the standard
+                    # production-mode path: disable security and proceed.
+                    LOGGER.warning(
+                        "Credential verification is not supported in production mode "
+                        "(ChifVerifyCredentials returned %s); proceeding with "
+                        "unauthenticated local access.",
+                        credreturn,
+                    )
                     dll.ChifDisableSecurity()
+                else:
+                    LOGGER.error("Error %s occurred while trying to open a channel to iLO.", credreturn)
+                    raise HpIloInitialError(f"Error {credreturn} occurred while trying to open a channel to iLO.")
             else:
                 LOGGER.debug("No username provided. Checking security requirement.")
-                if dll.ChifIsSecurityRequired() > 0:
-                    LOGGER.debug("High security mode detected but no credentials provided.")
+                if security_level > 0:
+                    LOGGER.warning("High security mode detected but no credentials provided.")
                     return False
                 else:
-                    LOGGER.debug("Security not required. Disabling security.")
+                    # No credentials and no security requirement: standard production-mode
+                    # unauthenticated local access.  Backward-compatible behaviour.
+                    LOGGER.info("Security not required and no credentials provided. Disabling security.")
                     dll.ChifDisableSecurity()
 
             return True

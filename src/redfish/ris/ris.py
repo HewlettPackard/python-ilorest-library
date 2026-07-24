@@ -481,10 +481,7 @@ class RisMonolith(Dictable):
         :type path_refresh: bool
         """
         if init:
-            if LOGGER.getEffectiveLevel() >= 20 and not json_out:
-                sys.stdout.write("Discovering data...")
-            else:
-                LOGGER.info("Discovering data...")
+            sys.stdout.write("Discovering data...")
             self.name = self.name + " at %s" % self.client.base_url
 
         selectivepath = path
@@ -539,10 +536,7 @@ class RisMonolith(Dictable):
             )
 
         if init:
-            if LOGGER.getEffectiveLevel() >= 20 and not json_out:
-                sys.stdout.write("Done\n")
-            else:
-                LOGGER.info("Done\n")
+            sys.stdout.write("Done\n")
         if self.directory_load and init:
             self._populatecollections()
 
@@ -598,10 +592,7 @@ class RisMonolith(Dictable):
         )
 
         if init:
-            if LOGGER.getEffectiveLevel() >= 20 and not json_out:
-                sys.stdout.write("Done\n")
-            else:
-                LOGGER.info("Done\n")
+            sys.stdout.write("Done\n")
         if self.directory_load and init:
             self._populatecollections()
 

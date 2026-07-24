@@ -168,7 +168,7 @@ class RmcApp(object):
         """True if we are caching data, False if we are not"""
         return True if self.cachedir else False
 
-    def restore(self, creds=None, enc=False):
+    def restore(self, creds=None, enc=False,  log_dir=None):
         """Restores the monolith from cache. Used to load a monolith data back into a new app
         class. Keyword arguments are only needed in a local client when in a high security mode.
 
@@ -178,7 +178,7 @@ class RmcApp(object):
                     if not.
         :type enc: bool
         """
-        self._cm.uncache_rmc(creds=creds, enc=enc)
+        self._cm.uncache_rmc(creds=creds, enc=enc, log_dir=log_dir)
 
     def set_encode_funct(self, funct):
         """Set the encoding function for cache to use. Can be used to protect sensitive data when

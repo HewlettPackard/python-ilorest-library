@@ -278,7 +278,7 @@ class RmcFileCacheManager(RmcCacheManager):
 
         return sessionlocs
 
-    def uncache_rmc(self, creds=None, enc=False):
+    def uncache_rmc(self, creds=None, enc=False, log_dir=None):
         """Uncaches monolith data from cache location specified by RmcApp.
 
         :param creds: Dictionary of username and password.
@@ -298,11 +298,11 @@ class RmcFileCacheManager(RmcCacheManager):
 
                 for index in index_cache:
                     clientfn = index["href"]
-                    self._uncache_client(clientfn, creds=creds, enc=enc)
+                    self._uncache_client(clientfn, creds=creds, enc=enc, log_dir=log_dir)
             except BaseException as excp:
                 LOGGER.warning("Unable to read cache data %s", excp)
 
-    def _uncache_client(self, cachefn, creds=None, enc=False):
+    def _uncache_client(self, cachefn, creds=None, enc=False, log_dir=None):
         """Monolith uncache function for parsing and passing all client data and associated
            credential attributes.
 
@@ -353,6 +353,7 @@ class RmcFileCacheManager(RmcCacheManager):
                     default_prefix=self._rmc.typepath.defs.startpath,
                     proxy=login_data.get("proxy", None),
                     ca_cert_data=login_data.get("ca_cert_data", {}),
+                    log_dir=log_dir,
                 )
                 if login_data.get("authorization_key"):
                     redfishinst.basic_auth = login_data.get("authorization_key")
