@@ -344,6 +344,9 @@ class RmcFileCacheManager(RmcCacheManager):
                     if isinstance(login_data["password"], bytes):
                         login_data["password"] = login_data["password"].decode("utf-8")
 
+                # NOTE: ilo_generation is restored from the cached "ilo" key so the
+                # connection uses the correct PQC TLS group list (e.g. iLO8 strict
+                # groups) when performing the stale-session DELETE on the next run.
                 redfishinst = RestClient(
                     username=login_data.get("username", "Administrator"),
                     password=login_data.get("password", None),
@@ -354,6 +357,7 @@ class RmcFileCacheManager(RmcCacheManager):
                     proxy=login_data.get("proxy", None),
                     ca_cert_data=login_data.get("ca_cert_data", {}),
                     log_dir=log_dir,
+                    ilo_generation=login_data.get("ilo"),
                 )
                 if login_data.get("authorization_key"):
                     redfishinst.basic_auth = login_data.get("authorization_key")

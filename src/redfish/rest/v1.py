@@ -107,12 +107,18 @@ class RestClientBase(object):
             _ = conn_kwargs.pop("password", None)
             _ = conn_kwargs.pop("sessionid", None)
             _ = conn_kwargs.pop("login_otp", None)
+            # security_state is a blobstore-only (in-band CHIF) hint; never forward it to a
+            # remote HTTP connection.
+            _ = conn_kwargs.pop("security_state", None)
             self.connection = HttpConnection(base_url, self._cert_data, **conn_kwargs)
         else:
             _ = conn_kwargs.pop("username", None)
             _ = conn_kwargs.pop("password", None)
             _ = conn_kwargs.pop("sessionid", None)
             _ = conn_kwargs.pop("login_otp", None)
+            # security_state is a blobstore-only (in-band CHIF) hint; never forward it to a
+            # remote HTTP connection.
+            _ = conn_kwargs.pop("security_state", None)
             self.connection = HttpConnection(base_url, self._cert_data, **conn_kwargs)
 
     def _get_req_headers(self, headers=None):

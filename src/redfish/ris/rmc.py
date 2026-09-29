@@ -220,6 +220,8 @@ class RmcApp(object):
         login_otp=None,
         log_dir=None,
         session_location=None,
+        ilo_generation=None,
+        security_state=None,
     ):
         """Performs a login on a the server specified by the keyword arguments. Will also create
         a monolith, client, and update the compatibility classes for the app instance. If base_url
@@ -253,6 +255,18 @@ class RmcApp(object):
         :param is_redfish: If True, a Redfish specific header (OData) will be
             added to every request. Only required if the system has both LegacyREST and Redfish.
         :type is_redfish: bool
+
+        :param ilo_generation: The iLO generation number reported by CHIF DetectILO (e.g. 101 for
+            iLO8). When provided, the PQC/TLS context is configured for the correct CNSA 2.0 level
+            instead of relying on environment-variable detection.
+        :type ilo_generation: int or None
+        :param security_state: Optional pre-computed in-band security state (get_security_state()
+            enum: 1=factory, 3=production, 4/5/6=high-security). Only meaningful for a local
+            (blobstore) login. When the mode is already known -- e.g. an iLO7+ ``--use_chif``
+            login, which is valid only in factory mode -- passing ``1`` lets the CHIF layer skip
+            the ``ChifVerifyCredentials()`` and ``get_security_state()`` round-trips for a faster
+            login. ``None`` (default) preserves in-band probing.
+        :type security_state: int or None
         """
 
         self.typepath.getgen(
@@ -266,6 +280,8 @@ class RmcApp(object):
             login_otp=login_otp,
             log_dir=log_dir,
             session_location=session_location,
+            ilo_generation=ilo_generation,
+            security_state=security_state,
         )
         if user_ca_cert_data and self.typepath.iloversion < 5.23:
             raise IncompatibleiLOVersionError(
@@ -289,6 +305,8 @@ class RmcApp(object):
             login_otp=login_otp,
             log_dir=log_dir,
             session_location=session_location,
+            ilo_generation=ilo_generation,
+            security_state=security_state,
         )
 
         self.current_client.login(self.current_client.auth_type)
@@ -1756,6 +1774,7 @@ class RmcApp(object):
         user_ca_cert_data=None,
         biospassword=None,
         sessionid=None,
+        ilo_generation=None,
     ):
         # Calling libhpsrv function to get session token
         session_location = ""
@@ -1783,6 +1802,7 @@ class RmcApp(object):
             login_otp=login_otp,
             log_dir=log_dir,
             session_location=session_location,
+            ilo_generation=ilo_generation,
         )
         return response
 

@@ -16,6 +16,7 @@
 
 # -*- coding: utf-8 -*-
 """All Connections for interacting with REST."""
+
 import gzip
 import json
 import logging
@@ -24,6 +25,7 @@ import time
 import urllib3
 from urllib3 import PoolManager, ProxyManager
 from urllib3.exceptions import DecodeError, MaxRetryError
+from urllib3.exceptions import SSLError as Urllib3SSLError
 
 try:
     urllib3.disable_warnings()
@@ -43,6 +45,7 @@ from redfish.hpilo.risblobstore2 import (
 )
 from redfish.hpilo.rishpilo import HpIloChifPacketExchangeError
 from redfish.rest.containers import RestRequest, RestResponse, RisRestResponse
+from redfish.rest import pqc
 from redfish.security_masking import SecurityMasker
 
 # ---------End of imports---------
@@ -64,6 +67,19 @@ class RetriesExhaustedError(Exception):
 
 class VnicNotEnabledError(Exception):
     """Raised when retry attempts have been exhausted when VNIC is not enabled."""
+
+    pass
+
+
+class VnicTlsHandshakeError(Exception):
+    """Raised when a TLS handshake failure prevents reaching the VNIC endpoint.
+
+    This is distinct from :class:`VnicNotEnabledError`: the VNIC is present and
+    the TCP connection succeeds, but the TLS negotiation fails — most commonly
+    because iLO8 is in CNSA 2.0 (Level V) strict mode and requires
+    ``MLKEM1024`` / ``SecP384r1MLKEM1024`` KEM groups that the client's OpenSSL
+    build does not offer by default.
+    """
 
     pass
 
@@ -141,6 +157,25 @@ class HttpConnection(object):
                 "ca_certs" in cert_data and cert_data["ca_certs"]
             ):
                 self._connection_properties.update({"ca_cert_data": cert_data})
+        # Optional certificate pinning: authenticate the *specific* server cert by
+        # its SHA-256 (or sha1/md5) fingerprint even when the chain is not verified.
+        # This is the secure way to trust a self-signed iLO certificate (e.g. a
+        # CNSA 2.0 ML-DSA-87 cert) without an enterprise CA.
+        self._assert_fingerprint = None
+        pin = None
+        if cert_data and isinstance(cert_data, dict):
+            pin = cert_data.get("fingerprint") or cert_data.get("assert_fingerprint")
+        pin = pin or self._connection_properties.pop("assert_fingerprint", None)
+        if pin:
+            try:
+                self._assert_fingerprint = pqc.normalize_fingerprint(pin)
+            except ValueError as exc:
+                LOGGER.warning("Ignoring invalid certificate fingerprint pin: %s", exc)
+        # Optional iLO generation hint: drives automatic PQC mode selection
+        # (hybrid for iLO7, strict for iLO8+, off for iLO5/6).
+        _gen = self._connection_properties.pop("ilo_generation", None)
+        if _gen is not None:
+            self._connection_properties["ilo_generation"] = _gen
         self._proxy = self._connection_properties.pop("proxy", None)
         self.session_key = self._connection_properties.pop("session_key", None)
         self.session_location = self._connection_properties.pop("session_location", None)
@@ -184,19 +219,71 @@ class HttpConnection(object):
                 cert_reqs = "CERT_REQUIRED"
                 LOGGER.info("Server certificate verification enabled with provided CA.")
 
+        # Resolve an SSLContext to use for the connection. An explicit caller
+        # supplied ``ssl_context`` always wins; otherwise a PQC-preferring
+        # context may be built (hybrid by default). A ``None`` result preserves
+        # the transport's historical behavior (urllib3 builds its own context).
+        ssl_context = self._resolve_ssl_context(cert_reqs)
+        manager_kwargs = dict(self._connection_properties)
+        if ssl_context is not None:
+            manager_kwargs["ssl_context"] = ssl_context
+        # Certificate pinning: urllib3 verifies the peer cert fingerprint and
+        # raises SSLError on mismatch, authenticating the server even under
+        # CERT_NONE. This closes the MITM gap for self-signed iLO certificates.
+        if self._assert_fingerprint:
+            manager_kwargs["assert_fingerprint"] = self._assert_fingerprint
+            LOGGER.info("Certificate pinning enabled (assert_fingerprint).")
+
         if self.proxy:
             if self.proxy.startswith("socks"):
                 LOGGER.info("Initializing a SOCKS proxy.")
-                http = SOCKSProxyManager(self.proxy, cert_reqs=cert_reqs, maxsize=50, **self._connection_properties)
+                http = SOCKSProxyManager(self.proxy, cert_reqs=cert_reqs, maxsize=50, **manager_kwargs)
             else:
                 LOGGER.info("Initializing a HTTP proxy.")
-                http = ProxyManager(self.proxy, cert_reqs=cert_reqs, maxsize=50, **self._connection_properties)
+                http = ProxyManager(self.proxy, cert_reqs=cert_reqs, maxsize=50, **manager_kwargs)
         else:
             LOGGER.info("Initializing no proxy.")
 
-            http = PoolManager(cert_reqs=cert_reqs, maxsize=50, **self._connection_properties)
+            http = PoolManager(cert_reqs=cert_reqs, maxsize=50, **manager_kwargs)
 
         self._conn = http.request
+
+    def _resolve_ssl_context(self, cert_reqs):
+        """Resolve the SSLContext for the connection.
+
+        An explicit caller-supplied ``ssl_context`` (passed through
+        ``client_kwargs``) takes precedence. Otherwise a PQC-preferring context
+        is built via :func:`redfish.rest.pqc.build_pqc_ssl_context`. An optional
+        ``pqc_mode`` keyword (also passed through ``client_kwargs``) overrides
+        the environment-driven mode for this connection.
+
+        :param cert_reqs: urllib3-style requirement reflecting the current
+            verification policy (``"CERT_NONE"`` or ``"CERT_REQUIRED"``).
+        :type cert_reqs: str
+        :returns: An :class:`ssl.SSLContext`, or ``None`` to keep the transport
+            default behavior.
+        """
+        explicit = self._connection_properties.pop("ssl_context", None)
+        if explicit is not None:
+            # Consume any pqc_mode so it never leaks into the PoolManager kwargs.
+            self._connection_properties.pop("pqc_mode", None)
+            return explicit
+
+        pqc_mode = self._connection_properties.pop("pqc_mode", None)
+        ilo_generation = self._connection_properties.pop("ilo_generation", None)
+        try:
+            return pqc.build_pqc_ssl_context(
+                cert_reqs=cert_reqs,
+                ca_certs=self._connection_properties.get("ca_certs"),
+                mode=pqc_mode,
+                ilo_generation=ilo_generation,
+            )
+        except pqc.PQCNotAvailableError:
+            # strict mode explicitly requested but unavailable: surface to caller.
+            raise
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.debug("Could not build PQC SSL context; using transport defaults: %s", exc)
+            return None
 
     def rest_request(self, path, method="GET", args=None, body=None, headers=None):
         """Format and do HTTP Rest request
@@ -312,9 +399,11 @@ class HttpConnection(object):
             request_args["body"] = body
         try:
             resp = self._conn(method, reqfullpath, **request_args)
-        except MaxRetryError:
+        except MaxRetryError as exc:
             vnic_url = "16.1.15.1"
             if reqfullpath.find(vnic_url) != -1:
+                if isinstance(getattr(exc, "reason", None), Urllib3SSLError):
+                    raise VnicTlsHandshakeError() from exc
                 raise VnicNotEnabledError()
             raise RetriesExhaustedError()
         except DecodeError:
@@ -388,7 +477,12 @@ class Blobstore2Connection(object):
         self.base_url = "blobstore://."
         self._connection_properties = dict(conn_kwargs)
         self.session_key = self._connection_properties.pop("sessionid", None)
-        self._init_connection(**self._connection_properties)
+        # NOTE: _init_connection is deferred to the first rest_request call
+        # (lazy initialization).  This avoids opening a CHIF channel during
+        # session-cache restore (uncache_rmc) when the caller — typically a
+        # raw command — will immediately create its own BlobStore2 instance
+        # and never use this connection object.  Eager init costs ~1–2 s per
+        # invocation because BlobStore2.__init__ opens a CHIF channel.
 
     def _init_connection(self, **kwargs):
         """Initiate blobstore connection"""
@@ -400,15 +494,23 @@ class Blobstore2Connection(object):
         if isinstance(password, bytes):
             password = password.decode("utf-8")
         log_dir = kwargs.get("log_dir", "")
+        # Optional pre-computed security state (get_security_state() enum: 1=factory,
+        # 3=production, 4/5/6=high-security). When supplied by a caller that already learned
+        # the mode before login, it lets us skip the in-band ChifVerifyCredentials() and
+        # get_security_state() round-trips on the factory fast-path. None => probe in-band.
+        security_state_hint = kwargs.get("security_state")
         try:
-            correctcreds = BlobStore2.initializecreds(username=username, password=password, log_dir=log_dir)
+            correctcreds = BlobStore2.initializecreds(
+                username=username, password=password, log_dir=log_dir, security_state=security_state_hint
+            )
             bs2 = BlobStore2(log_dir=log_dir, username=username, password=password)
             if not correctcreds:
-                security_state = int(bs2.get_security_state())
-                if security_state == 3:
-                    raise InvalidCredentialsError(0)
-                else:
-                    raise SecurityStateError(security_state)
+                # initializecreds() has already made the invalid-credential decision: an
+                # in-band AccessDenied that it could not attribute to factory vs production
+                # (ChifIsSecurityRequired() reports 0 for both). Resolve it now -- probing
+                # the granular security state as late as possible, only at this point where
+                # we must either fail with invalid credentials or ignore it in factory mode.
+                self._resolve_unconfirmed_credentials(bs2, security_state_hint)
         except Blob2SecurityError:
             raise InvalidCredentialsError(0)
         except HpIloChifPacketExchangeError as excp:
@@ -421,6 +523,43 @@ class Blobstore2Connection(object):
                 raise
         else:
             self._conn = bs2
+
+    def _resolve_unconfirmed_credentials(self, bs2, security_state=None):
+        """Resolve credentials that could not be confirmed during in-band login.
+
+        Called only after the invalid-credential decision has been made (initializecreds
+        returned False). The granular security state decides the outcome:
+
+        * Factory mode (state 1): CCSE-148119 -- ChifVerifyCredentials() returns AccessDenied
+          even for VALID credentials, so ignore the failed pre-check and defer authentication
+          to the authenticated request (no change from previous behaviour).
+        * Production mode (state 3): in-band verification is reliable, so a wrong password is
+          real -- fail with InvalidCredentialsError.
+        * Any other (credential-required) state: raise SecurityStateError.
+
+        The security state is taken from the ``security_state`` hint when the caller has
+        already determined it (skipping the extra ``get_security_state()`` round-trip); it is
+        only probed in-band when no valid hint is supplied. This keeps the probe "as late as
+        possible" while allowing a faster login when the mode is already known.
+
+        :param bs2: an initialised BlobStore2 whose security_state can be queried.
+        :param security_state: optional pre-computed security state (1/3/4/5/6). When None or
+            an unrecognised value, the state is probed in-band via ``bs2.get_security_state()``.
+        :raises InvalidCredentialsError: in production mode with a wrong password.
+        :raises SecurityStateError: when the security mode requires credentials that were
+            not accepted.
+        """
+        if security_state not in (1, 3, 4, 5, 6):
+            security_state = int(bs2.get_security_state())
+        if security_state == 1:
+            LOGGER.debug(
+                "Factory mode: in-band verification is unreliable; ignoring the failed "
+                "pre-check and deferring authentication to the authenticated request."
+            )
+            return
+        if security_state == 3:
+            raise InvalidCredentialsError(0)
+        raise SecurityStateError(security_state)
 
     def rest_request(self, path="", method="GET", args=None, body=None, headers=None):
         """Rest request for blobstore client
@@ -437,6 +576,14 @@ class Blobstore2Connection(object):
         :type headers: dict
         :returns: A :class:`redfish.rest.containers.RestResponse` object
         """
+        # Lazy initialization: open the CHIF channel on first use rather than
+        # in __init__.  This prevents an unnecessary BlobStore2 open/close
+        # cycle when the connection object is built during session-cache
+        # restore but the caller (e.g. a raw command) never actually sends a
+        # request through it.
+        if self._conn is None:
+            self._init_connection(**self._connection_properties)
+
         # default headers if not passed in - otherwise will throw on .update call
         if headers is None:
             headers = {}

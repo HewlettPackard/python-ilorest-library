@@ -165,6 +165,23 @@ class HpIlo(object):
             LOGGER.error("An error occurred during initialization: %s", str(e))
             raise
 
+    def _check_handle(self):
+        """Raise HpIloInitialError if the CHIF handle has been released or closed.
+
+        Called at the entry point of every method that passes ``self.fhandle``
+        to a DLL function.  Without this guard, a ``None`` handle produces an
+        opaque ctypes access violation or ``TypeError`` that gives no indication
+        of *why* the channel is gone or what the caller should do.
+
+        Raises:
+            HpIloInitialError: Always, when ``fhandle`` is ``None``.
+        """
+        if getattr(self, "fhandle", None) is None:
+            raise HpIloInitialError(
+                "Operation attempted on a released or closed HpIlo channel. "
+                "Create a new HpIlo instance to open a fresh CHIF channel."
+            )
+
     def chif_packet_exchange(self, data):
         """Function for handling chif packet exchange
 
@@ -172,6 +189,7 @@ class HpIlo(object):
         :type data: str
 
         """
+        self._check_handle()
         LOGGER.info("Starting chif packet exchange...")
 
         LOGGER.debug("Data ready to be sent...")
@@ -219,6 +237,7 @@ class HpIlo(object):
         :type retries: int
 
         """
+        self._check_handle()
         tries = 0
         sequence = struct.unpack("<H", bytes(data[2:4]))[0]
 
@@ -246,6 +265,12 @@ class HpIlo(object):
                             sequence,
                             received_sequence,
                         )
+                    # Count the mismatch against the retry budget. Without this the
+                    # `continue` skips the `tries += 1` at the bottom of the loop, so a
+                    # persistent stale-sequence condition spins unbounded, hammering the
+                    # channel and ultimately forcing a failure + ChifClose. Bounding it
+                    # here keeps the retry loop strictly bounded (see CHANGELOG).
+                    tries += 1
                     continue  # Retry with a new attempt
 
                 # Successfully received response with correct sequence
@@ -262,10 +287,16 @@ class HpIlo(object):
                     LOGGER.debug("Attempt %d: Error while reading iLO: %s", tries + 1, str(excp))
 
                 if tries == (retries - 1):
-                    self.close()
+                    # Do NOT ChifClose here. The channel lifecycle on failure is owned by
+                    # the caller (BlobStore2._send_receive_raw), which performs the single
+                    # authoritative close()+reconnect. Closing here would pay a redundant
+                    # ~1-second ChifClose penalty inside the inner loop before re-raising.
+                    # release() drops the handle without that penalty; the OS reclaims the
+                    # /dev/hpilo fd, and the caller rebuilds the channel for the next retry.
+                    self.release()
 
                     if LOGGER.isEnabledFor(logging.DEBUG):
-                        LOGGER.debug("Final attempt failed. Closing connection.")
+                        LOGGER.debug("Final attempt failed. Releasing handle (outer owns close+reconnect).")
                     raise excp  # Raise after final attempt
 
             tries += 1
@@ -277,7 +308,16 @@ class HpIlo(object):
         raise HpIloSendReceiveError("iLO not responding")
 
     def close(self):
-        """Chif close function"""
+        """Close the CHIF channel explicitly.
+
+        This calls ChifClose() which incurs a ~1-second delay in the current
+        libhpsrv implementation.  Use only when the channel slot must be freed
+        for reuse within the same process (e.g., error recovery/reconnect).
+
+        For normal process exit, use :meth:`release` or let ``__del__`` run —
+        the kernel closes the /dev/hpilo file descriptor and the iLO driver
+        reclaims the channel automatically without the 1-second penalty.
+        """
         try:
             if getattr(self, "fhandle", None) is not None:
                 LOGGER.debug("Calling ChifClose...")
@@ -286,6 +326,23 @@ class HpIlo(object):
         except Exception:
             pass
 
+    def release(self):
+        """Release the channel handle without calling ChifClose.
+
+        On process exit the OS kernel closes the underlying /dev/hpilo file
+        descriptor and the iLO driver releases the channel — so an explicit
+        ChifClose (with its 1-second Sleep) is not required.  This method
+        simply marks the handle as released so no double-free occurs.
+        """
+        if getattr(self, "fhandle", None) is not None:
+            LOGGER.debug("Releasing CHIF handle without ChifClose (OS will clean up on exit).")
+            self.fhandle = None
+
     def __del__(self):
-        """Chif delete function"""
-        self.close()
+        """Release channel handle on garbage collection.
+
+        Avoids calling ChifClose() (and its 1-second Sleep penalty) during
+        normal interpreter shutdown.  The kernel guarantees file descriptor
+        cleanup on process exit.
+        """
+        self.release()

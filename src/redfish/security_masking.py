@@ -54,6 +54,7 @@ class SecurityMasker:
         "--filepass",
         "--backup-password",
         "--biospassword",
+        "--owner_auth",
     }
 
     # Fields requiring COMPLETE masking (no characters visible)
@@ -78,6 +79,7 @@ class SecurityMasker:
         "mfa_token",
         "csrf_token",
         "csrftoken",
+        "owner_auth",
     }
 
     # Fields allowing PARTIAL masking (last 4-6 chars visible for debugging)

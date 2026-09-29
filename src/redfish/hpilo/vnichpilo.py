@@ -42,6 +42,15 @@ from redfish.log_utils import RestDebugLogRotator
 LOGGER = logging.getLogger(__name__)
 
 
+RETURN_CODE_TPM_NV_DEFINE_FAILED = -38
+RETURN_CODE_TPM_GET_CAPABILITY_FAILED = -40
+RETURN_CODE_CANT_VALIDATE_CA = -27
+RETURN_CODE_TPM_OWNER_AUTH_REQUIRED = -63
+RETURN_CODE_TPM_BAD_AUTH = -65
+RETURN_CODE_TPM_NV_LOCKED = -66
+RETURN_CODE_TPM_DA_LOCKOUT = -67
+
+
 class GenerateAndSaveAccountError(Exception):
     """Raised when errors occured while generating and saving app account"""
 
@@ -102,6 +111,84 @@ class SavinginiLOError(Exception):
     pass
 
 
+class TPMBadAuthError(Exception):
+    """Raised when TPM bad owner authentication value is provided while saving app account in TPM"""
+
+    pass
+
+
+class TPMProvisionedAuthRequiredError(Exception):
+    """Raised when TPM owner authorization is required for TPM operations"""
+
+    pass
+
+
+class TPMGetCapabilityFailedError(Exception):
+    """Raised when TPM GetCapability API call fails"""
+
+    pass
+
+
+class TPMNVDefineFailedError(Exception):
+    """Raised when TPM NV_Define API call fails"""
+
+    pass
+
+
+class TPMNVLockedOutError(Exception):
+    """Raised when TPM NV access is locked"""
+
+    pass
+
+
+class TPMNVLockoutError(Exception):
+    """Raised when TPM is in DA lockout mode"""
+
+    pass
+
+
+class CantValidateCAError(Exception):
+    """Raised when the certificate CA chain cannot be validated (RC -27)"""
+
+    pass
+
+
+class ReactivateTPMBadAuthError(Exception):
+    """Raised when TPM bad authentication occurs during reactivate app account"""
+
+    pass
+
+
+class ReactivateTPMProvisionedAuthRequiredError(Exception):
+    """Raised when TPM owner authorization is required for TPM operations during reactivate app account"""
+
+    pass
+
+
+class ReactivateTPMGetCapabilityFailedError(Exception):
+    """Raised when TPM GetCapability API call fails during reactivate app account"""
+
+    pass
+
+
+class ReactivateTPMNVDefineFailedError(Exception):
+    """Raised when TPM NV_Define API call fails during reactivate app account"""
+
+    pass
+
+
+class ReactivateTPMNVLockedOutError(Exception):
+    """Raised when TPM NV access is locked during reactivate app account"""
+
+    pass
+
+
+class ReactivateTPMNVLockoutError(Exception):
+    """Raised when TPM is in DA lockout mode during reactivate app account"""
+
+    pass
+
+
 class GenBeforeLoginError(Exception):
     """Raised when error occurs while getting iLO Gen before login"""
 
@@ -115,13 +202,14 @@ class InvalidCommandLineError(Exception):
 
 
 class AppAccount(object):
-    def __init__(self, appname=None, appid=None, salt=None, username=None, password=None, log_dir=None):
+    def __init__(self, appname=None, appid=None, salt=None, username=None, password=None, owner_auth=None, log_dir=None):
         """Initialize the AppAccount object and configure logging."""
         self.appname = (appname or "self_register").encode("utf-8")
         self.dll = BlobStore2.gethprestchifhandle()
         self.salt = (salt or "self_register").encode("utf-8")
         self.username = username
         self.password = password
+        self.owner_auth = owner_auth
         self.log_dir = log_dir
 
         LOGGER.debug(
@@ -165,30 +253,59 @@ class AppAccount(object):
         """Generate and save an application account, logging each step."""
         LOGGER.info("Starting generate_and_save_apptoken process.")
 
-        self.dll.GenerateAppToken.argtypes = [c_char_p, c_char_p, c_char_p, c_char_p, c_char_p]
+        self.dll.GenerateAppToken.argtypes = [c_char_p, c_char_p, c_char_p, c_char_p, c_char_p, c_char_p]
         self.dll.GenerateAppToken.restype = c_int
 
         self.username = self.username.encode("utf-8")
         self.password = self.password.encode("utf-8")
+        # Use b"" (not "") so ctypes c_char_p receives bytes, not a bare str.
+        owner_auth = self.owner_auth.encode("utf-8") if self.owner_auth else b""
 
         LOGGER.debug("Calling GenerateAppToken for AppID: %s", self.appid.decode("utf-8"))
 
-        returncode = self.dll.GenerateAppToken(self.appid, self.appname, self.salt, self.username, self.password)
+        returncode = self.dll.GenerateAppToken(self.appid, self.appname, self.salt, self.username, self.password, owner_auth)
 
-        if returncode == BlobReturnCodes.SUCCESS:
+        if returncode in (BlobReturnCodes.SUCCESS, 1):
+            # RC 0  = success; RC +1 = HPSRV_RC_AutoProvisioningEnabled — Windows
+            # manages the TPM owner key, account created successfully without
+            # an explicit owner_auth.
+            if returncode == 1:
+                LOGGER.debug("GenerateAppToken returned +1 (Windows auto-provisioning active); treating as success.")
             LOGGER.info("Application account successfully generated and saved.")
             return BlobReturnCodes.SUCCESS
         elif returncode == -54:
-            LOGGER.error("Failed to save account in TPM.")
+            LOGGER.debug("Failed to save account in TPM.")
             raise SavinginTPMError()
         elif returncode == -53:
-            LOGGER.error("Failed to save account in iLO.")
+            LOGGER.debug("Failed to save account in iLO.")
             raise SavinginiLOError()
         elif returncode == -55:
             LOGGER.warning("Application account already exists.")
             raise AppAccountExistsError()
         elif returncode == -8:
             raise InvalidCredentialsError(0)
+        elif returncode == RETURN_CODE_CANT_VALIDATE_CA:
+            LOGGER.debug("Can't validate certificate CA chain.")
+            raise CantValidateCAError()
+        elif returncode in (RETURN_CODE_TPM_BAD_AUTH, -64):
+            # -65 = HPSRV_RC_TPMBadAuth; -64 = HPSRV_RC_TPMAuthFail (defensive alias)
+            LOGGER.debug("TPM authorization failed with invalid authorization value provided.")
+            raise TPMBadAuthError()
+        elif returncode == RETURN_CODE_TPM_OWNER_AUTH_REQUIRED:
+            LOGGER.debug("TPM is provisioned owner auth is required for TPM operations.")
+            raise TPMProvisionedAuthRequiredError()
+        elif returncode == RETURN_CODE_TPM_GET_CAPABILITY_FAILED:
+            LOGGER.debug("TPM GetCapability API Failed.")
+            raise TPMGetCapabilityFailedError()
+        elif returncode == RETURN_CODE_TPM_NV_DEFINE_FAILED:
+            LOGGER.debug("TPM NV_Define API Failed.")
+            raise TPMNVDefineFailedError()
+        elif returncode == RETURN_CODE_TPM_NV_LOCKED:
+            LOGGER.debug("TPM NV access is locked.")
+            raise TPMNVLockedOutError()
+        elif returncode == RETURN_CODE_TPM_DA_LOCKOUT:
+            LOGGER.debug("TPM is in DA lockout mode.")
+            raise TPMNVLockoutError()
         else:
             LOGGER.critical("Unknown return code: %d", returncode)
             raise GenerateAndSaveAccountError()
@@ -197,22 +314,48 @@ class AppAccount(object):
         """Reactivate an application account, logging each step."""
         LOGGER.info("Starting reactivate_apptoken process.")
 
-        self.dll.ReactivateAppToken.argtypes = [c_char_p, c_char_p, c_char_p, c_char_p, c_char_p]
+        self.dll.ReactivateAppToken.argtypes = [c_char_p, c_char_p, c_char_p, c_char_p, c_char_p, c_char_p]
         self.dll.ReactivateAppToken.restype = c_int
 
         user_name = self.username.encode("utf-8")
         password = self.password.encode("utf-8")
+        # Use b"" (not "") so ctypes c_char_p receives bytes, not a bare str.
+        owner_auth = self.owner_auth.encode("utf-8") if self.owner_auth else b""
 
         LOGGER.debug("Calling ReactivateAppToken for AppID: %s", self.appid.decode("utf-8"))
 
-        return_code = self.dll.ReactivateAppToken(self.appid, self.appname, self.salt, user_name, password)
+        return_code = self.dll.ReactivateAppToken(self.appid, self.appname, self.salt, user_name, password, owner_auth)
 
-        if return_code == BlobReturnCodes.SUCCESS:
+        if return_code in (BlobReturnCodes.SUCCESS, 1):
+            # RC +1 = HPSRV_RC_AutoProvisioningEnabled; treat as success.
             LOGGER.info("Application account has been reactivated successfully.")
             return BlobReturnCodes.SUCCESS
         elif return_code == -8:
-            LOGGER.error("Please enter valid credentials.")
+            # Surfaced once by the centralized handler; keep a debug trace only.
+            LOGGER.debug("Invalid credentials during reactivate (RC -8).")
             raise InvalidCredentialsError(0)
+        elif return_code == RETURN_CODE_CANT_VALIDATE_CA:
+            LOGGER.debug("Can't validate certificate CA chain during reactivate.")
+            raise CantValidateCAError()
+        elif return_code in (RETURN_CODE_TPM_BAD_AUTH, -64):
+            # -65 = HPSRV_RC_TPMBadAuth; -64 = HPSRV_RC_TPMAuthFail (defensive alias)
+            LOGGER.debug("TPM authorization failed with invalid authorization value provided.")
+            raise ReactivateTPMBadAuthError()
+        elif return_code == RETURN_CODE_TPM_OWNER_AUTH_REQUIRED:
+            LOGGER.debug("TPM is provisioned owner auth is required for TPM operations.")
+            raise ReactivateTPMProvisionedAuthRequiredError()
+        elif return_code == RETURN_CODE_TPM_GET_CAPABILITY_FAILED:
+            LOGGER.debug("TPM GetCapability API Failed.")
+            raise ReactivateTPMGetCapabilityFailedError()
+        elif return_code == RETURN_CODE_TPM_NV_DEFINE_FAILED:
+            LOGGER.debug("TPM NV_Define API Failed.")
+            raise ReactivateTPMNVDefineFailedError()
+        elif return_code == RETURN_CODE_TPM_NV_LOCKED:
+            LOGGER.debug("TPM NV access is locked.")
+            raise ReactivateTPMNVLockedOutError()
+        elif return_code == RETURN_CODE_TPM_DA_LOCKOUT:
+            LOGGER.debug("TPM is in DA lockout mode.")
+            raise ReactivateTPMNVLockoutError()
         else:
             LOGGER.critical("Unknown return code: %d", return_code)
             raise ReactivateAppAccountTokenError()
@@ -307,6 +450,28 @@ class AppAccount(object):
                 raise InactiveAppAccountTokenError()
             elif errorcode != BlobReturnCodes.SUCCESS:
                 raise Exception
+
+            # Defensive validation of the native call's output: a SUCCESS return
+            # code with an empty/None session id or location is a contract
+            # violation and must not be passed downstream. Historically this was
+            # seen under concurrent TPM access when the named TPM semaphore was
+            # destroyed by another process's disconnect (fixed in the CHIF DLL by
+            # not calling sem_unlink on release); it can still occur when running
+            # against an older/unfixed ilorest_chif or under transient TPM
+            # contention. Treat it as a retryable VnicLoginError with a clear
+            # message rather than returning an empty session that surfaces
+            # downstream as the confusing generic "Empty Session Id or Session
+            # Location was returned." error.
+            if not session_id.value or not session_location.value:
+                LOGGER.error(
+                    "GetSessionID reported success but returned an empty session "
+                    "(AppID: %s). This can indicate transient TPM semaphore "
+                    "contention when multiple processes access the TPM concurrently "
+                    "(e.g. against an older ilorest_chif). The operation can be retried.",
+                    self.appid.decode("utf-8"),
+                )
+                raise VnicLoginError()
+
             session_id = session_id.value.decode()
             session_location = session_location.value.decode()
             session_location = "/" + session_location.split("/", 3)[-1]

@@ -72,7 +72,7 @@ class Typesandpathdefines(object):
                 gen = gen.split(" ")[1]
             else:
                 gen = rootresp.get("Oem", {}).get("Hpe", {}).get("Moniker", {}).get("PRODGEN").split(" ")[1]
-            if int(gen) == 7:
+            if int(gen) >= 7:
                 return True
         return False
 
@@ -90,6 +90,8 @@ class Typesandpathdefines(object):
         login_otp=None,
         log_dir=None,
         session_location=None,
+        ilo_generation=None,
+        security_state=None,
     ):
         """Function designed to verify the servers platform. Will generate the `Typeandpathdefines`
         variables based on the system type that is detected.
@@ -110,6 +112,9 @@ class Typesandpathdefines(object):
         :type isredfish: bool
         :param logger: The logger handler to log data too uses the default if none is provided.
         :type logger: str
+        :param ilo_generation: The iLO generation number reported by CHIF DetectILO (e.g. 101 for
+            iLO8). When provided, the PQC/TLS context is configured for the correct CNSA 2.0 level.
+        :type ilo_generation: int or None
         """
 
         if self.adminpriv is False and url.startswith("blob"):
@@ -137,6 +142,8 @@ class Typesandpathdefines(object):
                     login_otp=login_otp,
                     log_dir=log_dir,
                     session_location=session_location,
+                    ilo_generation=ilo_generation,
+                    security_state=security_state,
                 )
                 client._get_root()
             except ServerDownOrUnreachableError as excp:
@@ -145,6 +152,9 @@ class Typesandpathdefines(object):
                 try_count += 1
             if not self.is_redfish:
                 try:
+                    # NOTE: Pass ilo_generation so this probe uses the correct PQC TLS
+                    # group list. Without it the connection falls back to a weaker
+                    # default that iLO8 rejects with SSLV3_ALERT_HANDSHAKE_FAILURE.
                     restclient = LegacyRestClient(
                         base_url=self.url,
                         username=username,
@@ -154,6 +164,8 @@ class Typesandpathdefines(object):
                         ca_cert_data=ca_cert_data,
                         login_otp=login_otp,
                         session_location=session_location,
+                        security_state=security_state,
+                        ilo_generation=ilo_generation,
                     )
                     restclient._get_root()
                     # Check that the response is actually legacy rest and not a redirect
@@ -189,8 +201,8 @@ class Typesandpathdefines(object):
                     self.ilogen = next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get(
                         "ManagerType"
                     )
-                    self.ilover = next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get(
-                        "ManagerFirmwareVersion"
+                    self.ilover = next(iter(rootresp.get("Oem", {}).get("Hpe", {}).get("Manager", {}))).get(
+                    "ManagerFirmwareVersion", None
                     )
                     if self.ilogen.split(" ")[-1] == "CM":
                         # Assume iLO 4 types in Moonshot

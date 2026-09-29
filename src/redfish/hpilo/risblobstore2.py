@@ -215,9 +215,14 @@ class BlobStore2(object):
         LOGGER.debug("BlobStore initialized with log directory: %s", log_dir)
 
     def __del__(self):
-        """Blob store 2 close channel function"""
+        """Release channel resources on garbage collection.
+
+        Uses release() instead of close() to avoid the 1-second ChifClose
+        Sleep penalty during normal process exit.  The OS kernel guarantees
+        /dev/hpilo file descriptor cleanup when the process terminates.
+        """
         if hasattr(self, "channel"):
-            self.channel.close()
+            self.channel.release()
 
         # Zero the retained password buffer so the plaintext secret does not linger
         # in memory after the store is destroyed.
@@ -740,16 +745,49 @@ class BlobStore2(object):
         rsp_key="RisResponse",
         rsp_namespace="volatile",
     ):
-        """Read/write blob via immediate operation
+        """Execute a Redfish REST request over the CHIF in-band channel.
 
-        :param req_data: The blob data to be read/written.
-        :type req_data: str.
-        :param rqt_key: The blob key to be used for the request data.
-        :type rqt_key: str.
-        :param rsp_key: The blob key to be used for the response data.
-        :type rsp_key: str.
-        :param rsp_namespace: The blob namespace to retrieve the response from.
-        :type rsp_namespace: str.
+        CHIF recvmode protocol
+        ~~~~~~~~~~~~~~~~~~~~~~
+        The CHIF firmware returns a fixed-format response packet.  Bytes
+        [12:16] of that packet carry a 32-bit little-endian field called
+        *recvmode*:
+
+        * **recvmode = 0** (inline response) — iLO fit the REST response into
+          the CHIF exchange packet itself.  The response body lives at offset
+          ``fixdlen`` inside the same packet.  iLO **did NOT create** a volatile
+          response blob at ``rsp_key``.  Calling ``self.delete(rsp_key, ...)``
+          would be a phantom CHIF round-trip: open a channel, ask iLO to delete
+          a key that was never written, receive ``NOTFOUND`` / error, close the
+          channel (paying the ~1 s ``ChifClose`` penalty) — for zero benefit.
+
+        * **recvmode = 1** (blob response) — the response was too large for the
+          inline CHIF packet so iLO wrote it to the volatile blob store at
+          ``rsp_key``.  The caller **must** call ``self.read(rsp_key, ...)`` to
+          retrieve the body and then ``self.delete(rsp_key, ...)`` to release
+          the blob slot.  Skipping the delete leaks a blob entry on iLO.
+
+        Code-level proof that recvmode drives the delete decision:
+
+        1. ``tmpresponse`` is set from the inline packet bytes only when
+           ``recvmode == 0``; it remains ``None`` for ``recvmode == 1``.
+        2. The guard ``if not tmpresponse and recvmode == 1:`` is the exclusive
+           entry point to ``self.read()`` + ``self.delete()``.  It can only be
+           ``True`` for ``recvmode == 1``.
+        3. For ``recvmode == 0`` the ``else`` branch is reached with
+           ``tmpresponse`` already populated — no read/delete is needed.
+
+        This contract is enforced by
+        ``tests/unit/test_rest_immediate_recvmode.py``.
+
+        :param req_data: The REST request payload (bytes or str).
+        :type req_data: bytes or str
+        :param rqt_key: Blob key for the outbound request (large-request path).
+        :type rqt_key: str
+        :param rsp_key: Suggested blob key for the response (large-response path).
+        :type rsp_key: str
+        :param rsp_namespace: Blob namespace for response retrieval.
+        :type rsp_namespace: str
         """
         # Log generated keys
         rqt_key = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
@@ -844,16 +882,21 @@ class BlobStore2(object):
             except Exception:
                 raise
         else:
-            try:
-                self.delete(rsp_key, rsp_namespace)
-                LOGGER.debug("Successfully deleted blob with key: %s", rsp_key)
-            except Blob2OverrideError:
-                LOGGER.warning("Blob delete skipped due to Blob2OverrideError.")
-            except HpIloChifPacketExchangeError:
-                LOGGER.warning("Packet exchange error during delete operation.")
-            except Exception as excp:
-                LOGGER.warning("Error deleting blob: %s", excp)
-                raise
+            # recvmode == 0 (inline response): iLO returned the REST response body
+            # directly inside the CHIF exchange packet.  The volatile blob store was
+            # NOT touched — no blob was written at rsp_key.
+            #
+            # Calling self.delete(rsp_key, ...) here would be a phantom CHIF
+            # round-trip on a key that was never created:
+            #   open channel → delete(NOTFOUND) → close channel (~1 s ChifClose)
+            #
+            # Skipping the delete avoids one full CHIF open/close cycle per
+            # rest_immediate call, roughly halving CHIF traffic for the common
+            # small-request path.
+            #
+            # Protocol reference: see rest_immediate() docstring and
+            # tests/unit/test_rest_immediate_recvmode.py for the regression guards.
+            LOGGER.debug("Inline response (recvmode=0); no volatile blob was created — delete skipped.")
 
         return tmpresponse
 
@@ -882,16 +925,15 @@ class BlobStore2(object):
                 LOGGER.error("Error occurred with code: %d", errorcode)
                 raise HpIloError(errorcode)
 
-            # Attempt to retrieve the security state from the response
-            try:
-                securitystate = struct.unpack("<c", bytes(resp[72]))[0]
-                LOGGER.debug("Security state extracted as character: %s", securitystate)
-            except Exception:
-                # Fallback for non-character extraction (may be an integer)
-                securitystate = int(resp[72])
-                LOGGER.debug("Failed to extract character. Security state interpreted as integer: %d", securitystate)
-
-            LOGGER.debug("Returning security state: %s", securitystate)
+            # Extract the security state from the response. The state byte lives at offset
+            # 72 and, since ``resp`` is a bytearray, ``resp[72]`` is already the integer
+            # value (0-6). An earlier implementation reinterpreted it with
+            # ``struct.unpack("<c", bytes(resp[72]))``, but ``bytes(<int>)`` builds a
+            # zero-filled buffer (e.g. ``bytes(1) == b"\x00"``), which silently corrupted
+            # FACTORY state 1 into ``b"\x00"`` and made the caller's ``int(...)`` crash on
+            # factory ``use_chif`` logins. Read the integer directly instead.
+            securitystate = int(resp[72])
+            LOGGER.debug("Returning security state: %d", securitystate)
             return securitystate
 
         finally:
@@ -1119,6 +1161,17 @@ class BlobStore2(object):
                     )
                 return resp
             except Exception as exp:
+                excp = exp  # Store last exception for final raise
+
+                # On the final attempt there is no subsequent retry, so skip the
+                # close()+reconnect entirely: it would pay a wasted ~1-second ChifClose
+                # and build a brand-new channel that is immediately discarded before we
+                # raise. This trims one ChifClose (and one ChifCreate/Ping) off every
+                # fully-failed operation.
+                if attempt >= 3:
+                    LOGGER.warning("Attempt %d/3 failed (%s). No retries left; raising.", attempt, exp)
+                    break
+
                 self.channel.close()
                 LOGGER.warning(
                     "Attempt %d/3 failed (%s). Reinitializing CHIF channel.",
@@ -1135,16 +1188,20 @@ class BlobStore2(object):
                 # invoking lib.initiate_credentials() afterwards is a use-after-unload
                 # (undefined behaviour / possible crash) and would not actually
                 # apply the credentials to the freshly created channel.
-                if self._username and self._password:
+                #
+                # getattr guards against a partially-constructed store (e.g. built via
+                # object.__new__ in tests) that has no _username/_password attributes.
+                username = getattr(self, "_username", None)
+                password = getattr(self, "_password", None)
+                if username and password:
                     lib.initiate_credentials.argtypes = [c_char_p, c_char_p]
                     lib.initiate_credentials.restype = POINTER(c_ubyte)
-                    usernew = create_string_buffer(self._username.encode("utf-8"))
-                    passnew = create_string_buffer(bytes(self._password))
+                    usernew = create_string_buffer(username.encode("utf-8"))
+                    passnew = create_string_buffer(bytes(password))
                     lib.initiate_credentials(usernew, passnew)
                     LOGGER.debug("Credentials restored after channel reconnect.")
 
                 self.unloadchifhandle(lib)
-                excp = exp  # Store last exception for final raise
 
         LOGGER.error("All attempts to send/receive raw data have failed.")
 
@@ -1251,7 +1308,7 @@ class BlobStore2(object):
         libbhndl.updaterandval(rndval)
 
     @staticmethod
-    def initializecreds(username=None, password=None, log_dir=None):
+    def initializecreds(username=None, password=None, log_dir=None, security_state=None):
         """
         Initialize Chif and handle high-security credentials.
 
@@ -1270,6 +1327,14 @@ class BlobStore2(object):
         :type password: str
         :param log_dir: The directory where logs will be stored.
         :type log_dir: str
+        :param security_state: Optional pre-computed security state (as returned by
+            ``get_security_state()``: 1=factory, 3=production, 4/5/6=high-security). When the
+            caller already knows the mode (e.g. from a pre-login ``DetectILO``), a value of
+            ``1`` (factory) lets this method skip the ``ChifVerifyCredentials()`` round-trip
+            for a faster in-band login. ``None`` (default) preserves the original behaviour of
+            probing in-band. Only honoured when security is not required, so it can never be
+            used to bypass verification on a genuinely secure iLO.
+        :type security_state: int or None
         :return: True if successful, False otherwise.
         :rtype: bool
         :raises Blob2SecurityError: If security check fails.
@@ -1323,6 +1388,24 @@ class BlobStore2(object):
                 if security_level > 0:
                     LOGGER.info("High security mode detected. Authenticating credentials.")
                 else:
+                    # Not-required mode (factory or production). PERFORMANCE FAST-PATH:
+                    # if the caller has already reliably determined FACTORY mode
+                    # (security_state hint == 1), skip the ChifVerifyCredentials() round-trip
+                    # entirely. Factory mode ignores the in-band pre-check anyway
+                    # (CCSE-148119: it returns AccessDenied even for VALID credentials), so the
+                    # verification is pure latency. This restores ~7.2 login timing on factory
+                    # in-band logins. The ChifIsSecurityRequired() gate above still guarantees
+                    # we only reach here when security is NOT required, so a stale/incorrect
+                    # hint on a genuinely secure iLO takes the high-security branch instead and
+                    # is never trusted to disable security.
+                    if security_state == 1:
+                        LOGGER.info(
+                            "Factory mode (caller hint): skipping in-band credential "
+                            "verification and disabling security."
+                        )
+                        dll.ChifDisableSecurity()
+                        return True
+
                     # Production mode (security not required): credentials were supplied for
                     # extra safety. Validate them so that a wrong password is rejected even
                     # though iLO would otherwise allow unauthenticated local access.
@@ -1358,33 +1441,50 @@ class BlobStore2(object):
                     if security_level <= 0:
                         LOGGER.debug("Disabling security after successful credential verification.")
                         dll.ChifDisableSecurity()
-                elif credreturn == hpiloreturncodes.CHIFERR_AccessDenied:
-                    # Expected outcome for a wrong username/password. The caller
-                    # (rest/connections.py) converts this into InvalidCredentialsError,
-                    # and the front-end presents a single user-facing message. Log at
-                    # debug only to avoid emitting a duplicate error line on stdout.
-                    LOGGER.debug("Access Denied: Invalid credentials.")
-                    raise Blob2SecurityError()
-                elif security_level <= 0:
-                    # Production mode (security not required): iLO grants unauthenticated
-                    # local access and does not expose a CHIF credential-verification
-                    # path, so ChifVerifyCredentials() reports the operation as
-                    # unsupported (e.g. error 95 / EOPNOTSUPP on Linux) instead of
-                    # validating the password. This is expected on hardware and must not
-                    # abort the connection. Genuine credential rejection is still handled
-                    # by the CHIFERR_AccessDenied branch above, so we only reach here when
-                    # verification simply is not available. Fall back to the standard
-                    # production-mode path: disable security and proceed.
+                elif security_level > 0:
+                    # High-security mode is the ONLY mode where the in-band
+                    # ChifVerifyCredentials() pre-check is reliable, so it is the only
+                    # place a verification failure is treated as a hard gate.
+                    if credreturn == hpiloreturncodes.CHIFERR_AccessDenied:
+                        # Wrong username/password. The caller (rest/connections.py) converts
+                        # Blob2SecurityError into InvalidCredentialsError, and the front-end
+                        # presents a single user-facing message. Log at DEBUG only to avoid
+                        # emitting a duplicate error line on stdout.
+                        LOGGER.debug("Access Denied: Invalid credentials.")
+                        raise Blob2SecurityError()
+                    LOGGER.error("Error %s occurred while trying to open a channel to iLO.", credreturn)
+                    raise HpIloInitialError(f"Error {credreturn} occurred while trying to open a channel to iLO.")
+                else:
+                    # Security not required (ChifIsSecurityRequired() == 0). This value is
+                    # reported for BOTH factory and production modes, so we cannot decide
+                    # here whether an AccessDenied is a genuine wrong password.
+                    if credreturn == hpiloreturncodes.CHIFERR_AccessDenied:
+                        # AccessDenied is ambiguous in-band: iLO7 FACTORY mode returns it
+                        # even for VALID credentials (CCSE-148119), while PRODUCTION mode
+                        # returns it only for a genuinely wrong password. Disable security so
+                        # the channel keeps working (ChifDisableSecurity() invariant that
+                        # prevents ChifPacketExchange error 8 / RC 71), then return False so
+                        # the caller (Blobstore2Connection._init_connection) consults the
+                        # granular get_security_state() -- rejecting production (state 3) with
+                        # InvalidCredentialsError while letting factory (state 1) proceed.
+                        LOGGER.debug(
+                            "Access Denied in a security-not-required mode; deferring the "
+                            "factory-vs-production decision to the caller."
+                        )
+                        dll.ChifDisableSecurity()
+                        return False
+
+                    # Any other (non-AccessDenied) error means in-band verification is
+                    # unsupported on this gen (e.g. 95 / EOPNOTSUPP), not a bad-password
+                    # signal. Disable security so unauthenticated local access keeps working
+                    # and defer authentication to the authenticated request.
                     LOGGER.warning(
-                        "Credential verification is not supported in production mode "
-                        "(ChifVerifyCredentials returned %s); proceeding with "
-                        "unauthenticated local access.",
+                        "Credential verification is unsupported in production/factory mode "
+                        "(ChifVerifyCredentials returned %s); disabling security and "
+                        "deferring authentication to the authenticated request.",
                         credreturn,
                     )
                     dll.ChifDisableSecurity()
-                else:
-                    LOGGER.error("Error %s occurred while trying to open a channel to iLO.", credreturn)
-                    raise HpIloInitialError(f"Error {credreturn} occurred while trying to open a channel to iLO.")
             else:
                 LOGGER.debug("No username provided. Checking security requirement.")
                 if security_level > 0:
