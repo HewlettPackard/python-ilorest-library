@@ -354,11 +354,17 @@ class RestClient(RestClientBase):
                 session_loc = session_loc.replace(" ", "%20")
             else:
                 parse_object = urlparse(self.base_url)
-                if parse_object.hostname is not None:
+                if parse_object.netloc:
+                    newurl = (parse_object.scheme or "https") + "://" + parse_object.netloc
+                    session_loc = self._session_location.replace(newurl, "")
+                if (not session_loc or session_loc == self._session_location) and parse_object.hostname is not None:
                     newurl = "https://" + parse_object.hostname
                     session_loc = self._session_location.replace(newurl, "")
-                else:
+                if not session_loc or session_loc == self._session_location:
                     session_loc = self._session_location.replace(self.base_url, "")
+                if session_loc.startswith("http://") or session_loc.startswith("https://"):
+                    parsed = urlparse(session_loc)
+                    session_loc = parsed.path + ("?" + parsed.query if parsed.query else "")
         return session_loc
 
     @session_location.setter
