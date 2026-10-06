@@ -21,9 +21,9 @@ setup(name='python_ilorest_library',
           'Topic :: Communications'
       ],
       keywords='Hewlett Packard Enterprise',
-      url='https://github.com/HewlettPackard/python-ilorest-library',
-      packages=find_packages('src'),
-      package_dir={'': 'src'},
+      url='https://github.com/HewlettPackard/python-ilorest-library'
+      packages=['ilorest-lib'] + [f'ilorest-lib.{p}' for p in find_packages('src/redfish') if p != ''],
+      package_dir={'ilorest-lib': 'src/redfish'},,
       install_requires=[
           'jsonpatch',
           'jsonpath_rw',
