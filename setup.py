@@ -26,7 +26,7 @@ setup(name='python_ilorest_library',
       package_dir={'': 'src'},
       install_requires=[
           'jsonpatch',
-          'jsonpath_rw',
+          'jsonpath_ng',
           'jsonpointer',
           'urllib3',
           'six'

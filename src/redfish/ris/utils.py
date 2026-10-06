@@ -31,7 +31,7 @@ try:
 except ImportError:
     from collections.abc import Mapping
 
-import jsonpath_rw
+import jsonpath_ng
 from six import iterkeys, string_types
 
 from redfish.ris.rmc_helper import IncorrectPropValue
@@ -144,10 +144,10 @@ def get_errmsg_type(results):
 
     message_type = None
     try:
-        jsonpath_expr = jsonpath_rw.parse("$..MessageId")
+        jsonpath_expr = jsonpath_ng.parse("$..MessageId")
         messageid = [match.value for match in jsonpath_expr.find(results.dict)]
         if not messageid:
-            jsonpath_expr = jsonpath_rw.parse("$..MessageID")
+            jsonpath_expr = jsonpath_ng.parse("$..MessageID")
             messageid = [match.value for match in jsonpath_expr.find(results.dict)]
         if messageid:
             message_type = messageid[0].split(".")[0]
@@ -206,7 +206,7 @@ def checkallowablevalues(newdict=None, oridict=None):
     for strmatch in re.finditer("@Redfish.AllowableValues", str(oridict)):
         propname = str(oridict)[: strmatch.start()].split("'")[-1]
         strtomatch = "$..'{0}@Redfish.AllowableValues'".format(propname)
-        jsonpath_expr = jsonpath_rw.parse(strtomatch)
+        jsonpath_expr = jsonpath_ng.parse(strtomatch)
         matches = jsonpath_expr.find(oridict)
         if matches:
             for match in matches:
@@ -214,7 +214,7 @@ def checkallowablevalues(newdict=None, oridict=None):
                 if "Actions" in fullpath:
                     continue
                 checkpath = fullpath.split("@Redfish.AllowableValues")[0]
-                jexpr2 = jsonpath_rw.parse(checkpath)
+                jexpr2 = jsonpath_ng.parse(checkpath)
                 valmatches = jexpr2.find(newdict)
                 if valmatches:
                     for mat in valmatches:

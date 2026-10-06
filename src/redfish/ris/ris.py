@@ -36,7 +36,7 @@ except ImportError:
 
 from queue import Queue
 
-import jsonpath_rw
+import jsonpath_ng
 import jsonpointer
 from jsonpointer import set_pointer
 from six.moves.urllib.parse import urlparse, urlunparse
@@ -678,9 +678,9 @@ class RisMonolith(Dictable):
         if loadtype == "href":
             # follow all the href attributes
             if self.is_redfish:
-                jsonpath_expr = jsonpath_rw.parse("$..'@odata.id'")
+                jsonpath_expr = jsonpath_ng.parse("$..'@odata.id'")
             else:
-                jsonpath_expr = jsonpath_rw.parse("$..href")
+                jsonpath_expr = jsonpath_ng.parse("$..href")
             matches = jsonpath_expr.find(resp.dict)
 
             if "links" in resp.dict and "NextPage" in resp.dict["links"]:
@@ -760,9 +760,9 @@ class RisMonolith(Dictable):
                 )
             if loadcomplete:
                 if path == "/rest/v1":
-                    schemamatch = jsonpath_rw.parse("$..extref")
+                    schemamatch = jsonpath_ng.parse("$..extref")
                 else:
-                    schemamatch = jsonpath_rw.parse("$..Uri")
+                    schemamatch = jsonpath_ng.parse("$..Uri")
                 smatches = schemamatch.find(resp.dict)
                 matches = matches + smatches
                 for match in matches:
@@ -786,7 +786,7 @@ class RisMonolith(Dictable):
         # pylint: disable=maybe-no-member
         if not self.typepath.gencompany:
             return self._parse_schema_gen(resp)
-        jsonpath_expr = jsonpath_rw.parse('$.."$ref"')
+        jsonpath_expr = jsonpath_ng.parse('$.."$ref"')
         matches = jsonpath_expr.find(resp.dict)
         respcopy = resp.dict
         typeregex = r"([#,@].*?\.)"
@@ -938,7 +938,7 @@ class RisMonolith(Dictable):
         # pylint: disable=maybe-no-member
         getval = lambda inmat: getval(inmat.left) + "/" + str(inmat.right) if hasattr(inmat, "left") else str(inmat)
         respcopy = resp.dict
-        jsonpath_expr = jsonpath_rw.parse('$.."anyOf"')
+        jsonpath_expr = jsonpath_ng.parse('$.."anyOf"')
         while True:
             matches = jsonpath_expr.find(respcopy)
             if not matches:
@@ -972,7 +972,7 @@ class RisMonolith(Dictable):
                 itempath.resolve(respcopy).pop("anyOf")
                 itempath.resolve(respcopy).update(newval)
 
-        jsonpath_expr = jsonpath_rw.parse('$.."$ref"')
+        jsonpath_expr = jsonpath_ng.parse('$.."$ref"')
         matches = jsonpath_expr.find(respcopy)
         if matches:
             for _, match in enumerate(matches):

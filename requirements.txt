@@ -1,5 +1,5 @@
 jsonpatch
-jsonpath_rw
+jsonpath_ng
 jsonpointer
 urllib3
 six
