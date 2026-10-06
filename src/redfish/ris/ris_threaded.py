@@ -21,7 +21,7 @@ import logging
 import threading
 from queue import Empty
 
-import jsonpath_rw
+import jsonpath_ng
 
 # Added for py3 compatibility
 import six
@@ -129,9 +129,9 @@ class LoadWorker(threading.Thread):
 
                 # follow all the href attributes
                 if theobj.is_redfish:
-                    jsonpath_expr = jsonpath_rw.parse("$..'@odata.id'")
+                    jsonpath_expr = jsonpath_ng.parse("$..'@odata.id'")
                 else:
-                    jsonpath_expr = jsonpath_rw.parse("$..href")
+                    jsonpath_expr = jsonpath_ng.parse("$..href")
                 matches = jsonpath_expr.find(resp.dict)
 
                 if "links" in resp.dict and "NextPage" in resp.dict["links"]:
@@ -230,9 +230,9 @@ class LoadWorker(threading.Thread):
                     )
                 if loadcomplete:
                     if path == "/rest/v1":
-                        schemamatch = jsonpath_rw.parse("$..extref")
+                        schemamatch = jsonpath_ng.parse("$..extref")
                     else:
-                        schemamatch = jsonpath_rw.parse("$..Uri")
+                        schemamatch = jsonpath_ng.parse("$..Uri")
                     smatches = schemamatch.find(resp.dict)
                     matches = matches + smatches
                     for match in matches:
